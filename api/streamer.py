@@ -24,9 +24,17 @@ async def stream_vercel_format(
 
     draft_tool_calls = {}
     pending_tool_calls = set()
+    task_completed = False  # Track if the task has been marked as completed
 
     try:
         async for chunk in stream:
+            # Check if this is a task completion message
+            if isinstance(chunk, str) and chunk == "END":
+                logger.info("Task marked as completed, finalizing stream")
+                task_completed = True
+                # Yield a clean finish
+                yield 'e:{{"finishReason":"stop","usage":{{"promptTokens":0,"completionTokens":0}},"isFinal":true}}\n'
+                break  # Exit the loop as we're done
 
             if isinstance(chunk, dict) and chunk.get("stop"):
                 yield 'e:{{"finishReason":"{reason}","usage":{{"promptTokens":{prompt},"completionTokens":{completion}}}}}\n'.format(
@@ -120,12 +128,15 @@ async def stream_vercel_format(
                 else:
                     yield f"0:{json.dumps(chunk.content)}\n"
     except Exception as e:
+        logger.error(f"Error in stream_vercel_format: {str(e)}")
         yield f"3:{json.dumps(e.__str__())}\n"
     finally:
-        finish_reason = "stop"
-        # Yield the final finish part
-        usage_obj = {
-            "promptTokens": 0,
-            "completionTokens": 0,
-        }
-        yield f"e:{json.dumps({'finishReason': finish_reason, 'usage': usage_obj, 'isContinued': False})}\n"
+        # Only yield the final finish if we haven't already marked as completed
+        if not task_completed:
+            finish_reason = "stop"
+            # Yield the final finish part
+            usage_obj = {
+                "promptTokens": 0,
+                "completionTokens": 0,
+            }
+            yield f"e:{json.dumps({'finishReason': finish_reason, 'usage': usage_obj, 'isFinal': True})}\n"

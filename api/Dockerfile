@@ -49,11 +49,11 @@ COPY ./api /app/api
 
 # Set environment variables
 ENV PYTHONPATH=/app
-ENV PORT=8000
+# Don't set PORT here, let Cloud Run set it
 ENV HOST=0.0.0.0
 
-# Expose the port
+# Expose port - this is just documentation, Cloud Run will use the PORT env var
 EXPOSE 8000
 
-# Start the application
-CMD uvicorn api.index:app --host $HOST --port $PORT
+# Start the application with dynamic port
+CMD uvicorn api.index:app --host 0.0.0.0 --port ${PORT:-8000} --timeout-keep-alive 0

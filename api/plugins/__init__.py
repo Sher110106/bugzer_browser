@@ -11,10 +11,8 @@ from typing import (
 )
 from ..models import ModelConfig, ModelProvider
 from .base import base_agent
-from .claude_computer_use import claude_computer_use
 from .browser_use import browser_use_agent
 from ..utils.types import AgentSettings
-from .claude_computer_use.prompts import SYSTEM_PROMPT
 
 # from .example_plugin import example_agent
 
@@ -22,8 +20,8 @@ from .claude_computer_use.prompts import SYSTEM_PROMPT
 class WebAgentType(Enum):
     BASE = "base"
     EXAMPLE = "example"
-    CLAUDE_COMPUTER_USE = "claude_computer_use"
     BROWSER_USE = "browser_use_agent"
+    BROWSER_USE_BATCH = "browser_use_batch"
 
 
 class SettingType(Enum):
@@ -90,35 +88,8 @@ AGENT_CONFIGS = {
         "description": "Agent with web browsing capabilities",
         "supported_models": [
             {
-                "provider": ModelProvider.OPENAI.value,
-                "models": ["gpt-4o", "gpt-4o-mini", "o1"],
-            },
-            {
-                "provider": ModelProvider.ANTHROPIC.value,
-                "models": ["claude-3-7-sonnet-latest", "claude-3-5-sonnet-20241022", "claude-3-opus-20240229", "claude-3-haiku-20240307"],
-            },
-            {
-                "provider": ModelProvider.GEMINI.value,
-                "models": [
-                    "gemini-2.0-flash",
-                    "gemini-1.5-pro"
-                ],
-            },
-            {
-                "provider": ModelProvider.DEEPSEEK.value,
-                "models": [
-                    "deepseek-chat",
-                    "deepseek-reasoner"
-                ],
-            },
-            {
-                "provider": ModelProvider.OLLAMA.value,
-                "models": [
-                    "llama3.3",
-                    "qwen2.5",
-                    "llama3",
-                    "mistral"
-                ],
+                "provider": ModelProvider.AZURE_OPENAI.value,
+                "models": ["gpt-4o", "gpt-4o-mini"],
             },
         ],
         "model_settings": {
@@ -137,14 +108,6 @@ AGENT_CONFIGS = {
                 "step": 0.05,
                 "description": "Controls randomness in the output",
             },
-            # "top_p": {
-            #     "type": SettingType.FLOAT.value,
-            #     "default": 0.9,
-            #     "min": 0,
-            #     "max": 1,
-            #     "step": 0.1,
-            #     "description": "Controls diversity via nucleus sampling",
-            # },
         },
         "agent_settings": {
             "steps": {
@@ -156,82 +119,56 @@ AGENT_CONFIGS = {
             },
         },
     },
-    WebAgentType.CLAUDE_COMPUTER_USE.value: {
-        "name": "Claude Computer Use",
-        "description": "Advanced agent with Claude-specific capabilities",
+    WebAgentType.BROWSER_USE_BATCH.value: {
+        "name": "Browser Agent (Batch)",
+        "description": "Non-streaming browser agent that runs to completion",
         "supported_models": [
             {
-                "provider": ModelProvider.ANTHROPIC_COMPUTER_USE.value,
-                "models": ["claude-3-5-sonnet-20241022"],
+                "provider": ModelProvider.AZURE_OPENAI.value,
+                "models": ["gpt-4o", "gpt-4o-mini"],
             },
-            {
-                "provider": ModelProvider.ANTHROPIC.value,
-                "models": ["claude-3-7-sonnet-latest"],
-            }
         ],
         "model_settings": {
             "max_tokens": {
                 "type": SettingType.INTEGER.value,
-                "default": 4090,
+                "default": 1000,
                 "min": 1,
                 "max": 4096,
                 "description": "Maximum number of tokens to generate",
             },
             "temperature": {
                 "type": SettingType.FLOAT.value,
-                "default": 0.6,
+                "default": 0.7,
                 "min": 0,
                 "max": 1,
                 "step": 0.05,
                 "description": "Controls randomness in the output",
             },
-            # "top_p": {
-            #     "type": SettingType.FLOAT.value,
-            #     "default": 0.9,
-            #     "min": 0,
-            #     "max": 1,
-            #     "step": 0.1,
-            #     "description": "Controls diversity via nucleus sampling",
-            # },
         },
         "agent_settings": {
-            "system_prompt": {
-                "type": SettingType.TEXTAREA.value,
-                "default": SYSTEM_PROMPT,
-                "maxLength": 4000,
-                "description": "System prompt for the agent",
-            },
-            "num_images_to_keep": {
+            "steps": {
                 "type": SettingType.INTEGER.value,
-                "default": 10,
-                "min": 1,
-                "max": 50,
-                "description": "Number of images to keep in memory",
-            },
-            "wait_time_between_steps": {
-                "type": SettingType.INTEGER.value,
-                "default": 1,
-                "min": 0,
-                "max": 10,
-                "description": "Wait time between steps in seconds",
+                "default": 125,  # More steps for batch mode since we don't need to wait for streaming
+                "min": 10,
+                "max": 150,
+                "description": "Max number of steps to take",
             },
         },
     },
-    
 }
 
 
 def get_web_agent(
     name: WebAgentType,
 ) -> Callable[
-    [ModelConfig, AgentSettings, List[Mapping[str, Any]], str], AsyncIterator[str]
+    [ModelConfig, AgentSettings, List[Mapping[str, Any]], str], Union[AsyncIterator[str], str]
 ]:
     if name == WebAgentType.BASE:
         return base_agent
-    elif name == WebAgentType.CLAUDE_COMPUTER_USE:
-        return claude_computer_use
     elif name == WebAgentType.BROWSER_USE:
         return browser_use_agent
+    elif name == WebAgentType.BROWSER_USE_BATCH:
+        return browser_use_agent_batch
     else:
         raise ValueError(f"Invalid agent type: {name}")
 

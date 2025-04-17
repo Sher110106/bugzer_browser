@@ -1,6 +1,6 @@
 "use client";
 
-import { NavBar } from "@/components/ui/navbar";
+import { Header }  from "@/components/Header";
 import { Toaster } from "@/components/ui/toaster";
 
 import { SettingsProvider } from "@/app/contexts/SettingsContext";
@@ -15,7 +15,7 @@ export function LayoutContent({ children }: { children: React.ReactNode }) {
       <ChatProvider>
         <SettingsProvider>
           <SteelProvider>
-            <NavBar />
+            <Header />
             <div className="bg-[--gray-1] pt-14">{children}</div>
             <Toaster />
           </SteelProvider>

@@ -1006,16 +1006,12 @@ export default function ChatPage() {
           ];
 
           // Direct API call to send the message
-          const response = await fetch("/api/chat", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              messages: messagesToSend,
-              ...chatBodyConfig,
-            }),
-          });
+          const response = await fetch(
+            `/api/sessions/${currentSession.id}/resume`,
+            {
+              method: "POST",
+            }
+          );
 
           if (!response.ok) {
             throw new Error(`Failed to send message: ${response.statusText}`);
@@ -1581,9 +1577,12 @@ export default function ChatPage() {
 
         // Make API call to resume
         console.info("🔄 Sending resume request for session:", currentSession.id);
-        const response = await fetch(`/api/sessions/${currentSession.id}/resume`, {
-          method: "POST",
-        });
+        const response = await fetch(
+          `/api/sessions/${currentSession.id}/resume`,
+          {
+            method: "POST",
+          }
+        );
 
         if (!response.ok) {
           const errorText = await response.text();

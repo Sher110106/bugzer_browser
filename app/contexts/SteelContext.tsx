@@ -108,9 +108,12 @@ export function SteelProvider({ children }: { children: React.ReactNode }) {
   // Helper function to release a session
   const releaseSession = useCallback(async (sessionId: string) => {
     try {
-      await fetch(`/api/sessions/${sessionId}/release`, {
-        method: "POST",
-      });
+      await fetch(
+        `/api/sessions/${sessionId}/release`,
+        {
+          method: "POST",
+        }
+      );
     } catch (error) {
       console.error("[ERROR] Failed to release session:", error);
     }
@@ -121,7 +124,9 @@ export function SteelProvider({ children }: { children: React.ReactNode }) {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (currentSession?.id) {
         console.log("[UNLOAD] BeforeUnload triggered - releasing session:", currentSession.id);
-        navigator.sendBeacon(`/api/sessions/${currentSession.id}/release`);
+        navigator.sendBeacon(
+          `/api/sessions/${currentSession.id}/release`
+        );
       }
     };
 
@@ -144,16 +149,19 @@ export function SteelProvider({ children }: { children: React.ReactNode }) {
         // Reset timer when creating a new session
         resetTimer();
 
-        const response = await fetch("/api/sessions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            agent_type: currentSettings.selectedAgent,
-            timeout: MAX_SESSION_DURATION,
-          }),
-        });
+        const response = await fetch(
+          "/api/sessions",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              agent_type: currentSettings.selectedAgent,
+              timeout: MAX_SESSION_DURATION,
+            }),
+          }
+        );
         const session = await response.json();
         console.log("[SUCCESS] Session created:", session);
         setCurrentSession(session);
