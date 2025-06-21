@@ -30,8 +30,8 @@ const ibmPlexMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Surf.new - built with Steel",
-  description: "Surf.new - web agent demos built on top of Steel",
+  title: "Bugzer",
+  description: "Bugzer - AI-powered bug tracking",
   icons: {
     icon: "/logo.svg",
   },

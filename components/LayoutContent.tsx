@@ -4,14 +4,12 @@ import { Header }  from "@/components/Header";
 import { Toaster } from "@/components/ui/toaster";
 
 import { SettingsProvider } from "@/app/contexts/SettingsContext";
-import { PostHogProvider } from "@/app/providers/PHProvider";
 
 import { ChatProvider } from "../app/contexts/ChatContext";
 import { SteelProvider } from "../app/contexts/SteelContext";
 
 export function LayoutContent({ children }: { children: React.ReactNode }) {
   return (
-    <PostHogProvider>
       <ChatProvider>
         <SettingsProvider>
           <SteelProvider>
@@ -21,6 +19,5 @@ export function LayoutContent({ children }: { children: React.ReactNode }) {
           </SteelProvider>
         </SettingsProvider>
       </ChatProvider>
-    </PostHogProvider>
   );
 }

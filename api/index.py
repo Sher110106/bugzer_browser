@@ -1,23 +1,21 @@
 from dotenv import load_dotenv
-from fastapi import FastAPI, Response, HTTPException, status, Depends
+from fastapi import FastAPI, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from .schemas import ChatRequest, SessionRequest, TestCreate, TestResponse, ReportCreate, ReportResponse, BatchAgentRequest
+from .schemas import ChatRequest, SessionRequest
 from .utils.prompt import convert_to_chat_messages
 from .models import ModelConfig
 from .plugins import WebAgentType, get_web_agent, AGENT_CONFIGS
 from .streamer import stream_vercel_format
 from api.middleware.profiling_middleware import ProfilingMiddleware
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict
 import os
 import asyncio
 import subprocess
 import re
 import time
 import logging
-from datetime import datetime
-from .utils.types import AgentSettings
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -50,9 +48,6 @@ steel_client = Steel(steel_api_key=STEEL_API_KEY, base_url=STEEL_API_URL)
 session_locks: Dict[str, asyncio.Lock] = {}
 session_last_resume: Dict[str, float] = {}
 RESUME_COOLDOWN = 1.0  # seconds
-
-# Keep track of batch job status
-batch_job_status: Dict[str, Dict[str, Any]] = {}
 
 origins = [
     "http://localhost",
@@ -245,6 +240,19 @@ async def handle_chat(request: ChatRequest):
         # Set the session ID on the controller
         controller.session_id = request.session_id
         controller.finished = False
+        
+        # Extract test_id and user_id from agent_settings if available
+        # We need to use hasattr/getattr as AgentSettings is a Pydantic model, not a dict
+        test_id = getattr(request.agent_settings, 'test_id', None) 
+        
+        if test_id:
+            logger.info(f"Test ID received in request: {test_id}")
+            # Store test_id in session metrics for reporting
+            from .plugins.browser_use.agent import session_metrics_storage
+            if request.session_id in session_metrics_storage:
+                session_metrics_storage[request.session_id]['test_id'] = test_id
+                
+       
 
         model_config_args = {
             "provider": request.provider,
@@ -328,259 +336,3 @@ async def healthcheck():
     Simple health check endpoint to verify the API is running.
     """
     return {"status": "ok"}
-
-@app.post("/api/tests", response_model=TestResponse, tags=["Tests"])
-async def create_test(
-    test_data: TestCreate,
-    user_id: str # In production this would use Depends(get_current_user)
-):
-    """
-    Create a new test for the authenticated user.
-    """
-    try:
-        # Create test data dictionary
-        test_dict = test_data.model_dump()
-        test_dict["user_id"] = user_id
-        test_dict["created_at"] = datetime.now().isoformat()
-        test_dict["updated_at"] = test_dict["created_at"]
-        
-        # Generate a unique ID (in production this would be handled by the database)
-        test_id = f"test_{int(time.time())}_{user_id[:8]}"
-        test_dict["id"] = test_id
-        
-        # In a real implementation, this would be a database insert
-        # For demo purposes, we'll just return the test data
-        result = {"data": [test_dict]}
-        
-        logger.info(f"Created test: {test_id}")
-        
-        return TestResponse(**result["data"][0])
-    except Exception as e:
-        logger.error(f"Failed to create test: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create test: {str(e)}"
-        )
-
-@app.post("/api/reports", response_model=ReportResponse, tags=["Reports"])
-async def create_report(
-    report_data: ReportCreate,
-    user_id: str # In production this would use Depends(get_current_user)
-):
-    """
-    Create a new report for the authenticated user.
-    """
-    try:
-        # In a real implementation, we would verify the test belongs to the user
-        # For demo purposes, we'll just create the report
-        
-        # Create the report dictionary
-        report_dict = report_data.model_dump()
-        report_dict["user_id"] = user_id
-        report_dict["created_at"] = datetime.now().isoformat()
-        report_dict["updated_at"] = report_dict["created_at"]
-        
-        # Generate a unique ID (in production this would be handled by the database)
-        report_id = f"report_{int(time.time())}_{user_id[:8]}"
-        report_dict["id"] = report_id
-        
-        # In a real implementation, this would be a database insert
-        # For demo purposes, we'll just return the report data
-        result = {"data": [report_dict]}
-        
-        logger.info(f"Created report: {report_id} for test: {report_data.test_id}")
-        
-        return ReportResponse(**result["data"][0])
-    except Exception as e:
-        logger.error(f"Failed to create report: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create report: {str(e)}"
-        )
-
-@app.post("/api/batch/browser_agent", tags=["Agents"])
-async def run_browser_agent_batch(
-    request: BatchAgentRequest,
-    user_id: str = "demo_user" # In production this would use Depends(get_current_user)
-):
-    """
-    Run the browser agent in batch mode without streaming.
-    Creates a test record, runs the agent, and stores the report.
-    """
-    try:
-        # 1. Create a test record first
-        test_data = TestCreate(
-            url=request.url,
-            description=request.description or f"Automated test for {request.url}",
-            status="pending"
-        )
-        
-        # Create the test record
-        test_result = await create_test(test_data, user_id)
-        test_id = test_result.id
-        
-        # Update batch job status
-        batch_job_status[test_id] = {
-            "status": "running",
-            "message": "Test initialized, running browser agent",
-            "started_at": datetime.now().isoformat()
-        }
-        
-        # 2. Prepare agent execution
-        # Create a message with the URL as the content
-        messages = [{"role": "user", "content": f"Analyze the website at {request.url} and provide a detailed performance report."}]
-        chat_messages = convert_to_chat_messages(messages)
-        
-        # Set up model and agent settings
-        model_config = ModelConfig(
-            provider=request.provider,
-            model_name=request.model_settings.model_choice,
-            temperature=request.model_settings.temperature
-        )
-        
-        agent_settings = request.agent_settings or AgentSettings(steps=100)
-        
-        # Create a unique session ID from the test ID
-        session_id = f"batch_{test_id}"
-        
-        # Create a timeout mechanism
-        timeout = request.timeout or 300  # default 5 minutes
-        
-        # 3. Run the agent with timeout
-        try:
-            # Update test status to "running"
-            # In a real implementation, this would update the database
-            logger.info(f"Starting batch agent for test: {test_id}")
-            
-            # Import the batch agent function
-            from .plugins.browser_use import browser_use_agent_batch
-            
-            # Run the agent
-            report = await asyncio.wait_for(
-                browser_use_agent_batch(
-                    model_config=model_config,
-                    agent_settings=agent_settings,
-                    history=[{"role": "user", "content": request.description}],
-                    session_id=session_id,
-                ),
-                timeout=timeout
-            )
-            
-            # 4. Create the report record
-            report_data = ReportCreate(
-                test_id=test_id,
-                content=report,
-                status="completed"
-            )
-            
-            report_result = await create_report(report_data, user_id)
-            
-            # 5. Update test status to "completed"
-            # In a real implementation, this would update the database
-            logger.info(f"Batch agent completed successfully for test: {test_id}")
-            
-            # Update batch job status
-            batch_job_status[test_id] = {
-                "status": "completed",
-                "message": "Test completed successfully",
-                "completed_at": datetime.now().isoformat()
-            }
-            
-            return {
-                "status": "success",
-                "test_id": test_id,
-                "report_id": report_result.id,
-                "report": report
-            }
-            
-        except asyncio.TimeoutError:
-            # Handle timeout
-            error_message = f"Agent execution timed out after {timeout} seconds"
-            logger.error(f"Timeout for test: {test_id} - {error_message}")
-            
-            # Update test status to "failed"
-            # In a real implementation, this would update the database
-            
-            # Still create a report with the error
-            report_data = ReportCreate(
-                test_id=test_id,
-                content=f"ERROR: {error_message}",
-                status="failed"
-            )
-            
-            report_result = await create_report(report_data, user_id)
-            
-            # Update batch job status
-            batch_job_status[test_id] = {
-                "status": "failed",
-                "message": error_message,
-                "completed_at": datetime.now().isoformat()
-            }
-            
-            return {
-                "status": "error",
-                "test_id": test_id,
-                "report_id": report_result.id,
-                "message": error_message
-            }
-            
-        except Exception as e:
-            # Handle other exceptions
-            error_message = f"Error during agent execution: {str(e)}"
-            logger.error(f"Error for test: {test_id} - {error_message}")
-            
-            # Update test status to "failed"
-            # In a real implementation, this would update the database
-            
-            # Still create a report with the error
-            report_data = ReportCreate(
-                test_id=test_id,
-                content=f"ERROR: {error_message}",
-                status="failed"
-            )
-            
-            report_result = await create_report(report_data, user_id)
-            
-            # Update batch job status
-            batch_job_status[test_id] = {
-                "status": "failed",
-                "message": error_message,
-                "completed_at": datetime.now().isoformat()
-            }
-            
-            return {
-                "status": "error",
-                "test_id": test_id,
-                "report_id": report_result.id,
-                "message": error_message
-            }
-            
-    except Exception as e:
-        logger.error(f"Error in batch browser agent: {str(e)}")
-        return {
-            "status": "error",
-            "message": str(e)
-        }
-
-@app.get("/api/batch/status/{test_id}", tags=["Agents"])
-async def check_batch_status(
-    test_id: str,
-    user_id: str = "demo_user" # In production this would use Depends(get_current_user)
-):
-    """
-    Check the status of a batch browser agent job.
-    """
-    # In a real implementation, we would verify that the test belongs to the user
-    # For demo purposes, we'll just check if the test exists in our status dictionary
-    
-    if test_id not in batch_job_status:
-        return {
-            "status": "unknown",
-            "message": "No batch job found for this test ID"
-        }
-    
-    status_data = batch_job_status[test_id]
-    
-    # In a real implementation, we would include test and report data from the database
-    
-    return status_data

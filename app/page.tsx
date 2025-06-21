@@ -11,8 +11,9 @@ export default function Home() {
         <Features />
       </div>
       <HowItWorks />
-      <CTA />
+      <div id="get-started">
+        <CTA />
+      </div>
     </main>
   )
 }
-

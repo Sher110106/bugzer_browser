@@ -7,6 +7,7 @@ import { Paperclip, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SettingsButton } from "@/components/ui/SettingsDrawer";
+import { cn } from "@/lib/utils";
 
 import { SendButton } from "./SendButton";
 import { ChatInputProps } from "./types";
@@ -118,18 +119,11 @@ export const ChatInput = forwardRef<HTMLTextAreaElement, ChatInputProps>(
               return (
                 <div
                   key={index}
-                  className="
-                  relative flex
-                  h-8 cursor-default
-                  items-center
-                  gap-2
-                  rounded-full
-                  border
-                  border-[#282828]
-                  bg-[#1c1c1c]
-                  px-2
-                  hover:bg-[#282828]
-                "
+                  className={cn(
+                    "relative flex h-8 cursor-default items-center gap-2",
+                    "rounded-full border border-[#282828] bg-[#1c1c1c] px-2",
+                    "hover:bg-[#282828]"
+                  )}
                 >
                   <span className="font-geist text-sm font-normal leading-[18px] text-[#6e6e6e]">
                     {truncateFileName(file)}
@@ -138,12 +132,10 @@ export const ChatInput = forwardRef<HTMLTextAreaElement, ChatInputProps>(
                   <button
                     type="button"
                     onClick={() => removeAttachment(index)}
-                    className="
-                    flex size-4 items-center
-                    justify-center rounded-full
-                    text-[#6e6e6e] 
-                    hover:text-white
-                  "
+                    className={cn(
+                      "flex size-4 items-center justify-center rounded-full",
+                      "text-[#6e6e6e] hover:text-white"
+                    )}
                     aria-label="Remove attachment"
                   >
                     <X size={16} />
@@ -163,18 +155,11 @@ export const ChatInput = forwardRef<HTMLTextAreaElement, ChatInputProps>(
             onChange={e => onChange(e.target.value)}
             placeholder={placeholder}
             disabled={disabled}
-            className="
-            w-full
-            flex-1
-            overflow-auto
-            rounded-md
-            bg-muted
-            text-base
-            text-[var(--gray-12)]
-            outline-none
-            [&::placeholder]:text-[var(--gray-11)]
-            [&:focus::placeholder]:opacity-0
-          "
+            className={cn(
+              "w-full flex-1 overflow-auto rounded-md bg-muted text-base",
+              "text-[var(--gray-12)] outline-none",
+              "[&::placeholder]:text-[var(--gray-11)] [&:focus::placeholder]:opacity-0"
+            )}
             style={{ resize: "none" }}
           />
 
@@ -195,20 +180,11 @@ export const ChatInput = forwardRef<HTMLTextAreaElement, ChatInputProps>(
               <Button
                 variant="ghost"
                 size="icon"
-                className={`
-                w-8
-                h-8
-                rounded-full
-                border
-                border-[--gray-3]
-                justify-center
-                items-center
-                gap-2.5
-                inline-flex
-                bg-[--gray-2]
-                hover:bg-[--gray-3]
-                disabled:bg-[--gray-1]
-              `}
+                className={cn(
+                  "w-8 h-8 rounded-full border border-[--gray-3]",
+                  "justify-center items-center gap-2.5 inline-flex",
+                  "bg-[--gray-2] hover:bg-[--gray-3] disabled:bg-[--gray-1]"
+                )}
                 onClick={handleOpenFileDialog}
                 disabled={attachments.length >= 5 || disabled}
                 type="button"

@@ -16,6 +16,7 @@ class AgentSettings(BaseModel):
     num_images_to_keep: Optional[int] = Field(default=10, ge=1, le=50)
     wait_time_between_steps: Optional[int] = Field(default=1, ge=0, le=10)
     steps: Optional[int] = None
+    test_id: Optional[str] = None
 
 
 class ModelSettings(BaseModel):

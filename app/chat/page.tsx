@@ -5,7 +5,7 @@ import { useInView } from "react-intersection-observer";
 import { CheckIcon } from "@radix-ui/react-icons";
 import { useChat } from "ai/react";
 import { Plus } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { MarkdownText } from "@/components/markdown";
 import { Browser } from "@/components/ui/Browser";
@@ -19,6 +19,8 @@ import { useToast } from "@/hooks/use-toast";
 import { useChatContext } from "@/app/contexts/ChatContext";
 import { useSettings } from "@/app/contexts/SettingsContext";
 import { useSteelContext } from "@/app/contexts/SteelContext";
+import { apiClient } from "@/utils/api-client";
+import { createClient } from "@/utils/supabase/client";
 
 const UserMessage = React.memo(({ content }: { content: string }) => {
   const hasLineBreaks = content.includes("\n");
@@ -558,6 +560,9 @@ interface ChatPageContentProps {
   isPaused: boolean;
   resumeLoading: boolean;
   handleResume: () => void;
+  testId: string | null;
+  onSubmitReport: () => void;
+  reportSubmitted: boolean;
 }
 
 const ChatPageContent = React.memo(
@@ -585,6 +590,9 @@ const ChatPageContent = React.memo(
     isPaused,
     resumeLoading,
     handleResume,
+    testId,
+    onSubmitReport,
+    reportSubmitted,
   }: ChatPageContentProps) => {
     console.log("[RENDER] ChatPageContent rendering");
 
@@ -612,6 +620,19 @@ const ChatPageContent = React.memo(
             md:border-r md:border-t-0
           "
           >
+            {testId && (
+              <div className="bg-blue-500/10 border-b border-blue-500/20 px-4 py-2 text-sm text-blue-600">
+                <div className="flex items-center justify-between">
+                  <span>Running test: {testId}</span>
+                  {reportSubmitted && (
+                    <span className="text-green-600 flex items-center">
+                      <CheckIcon className="mr-1 h-4 w-4" /> Results saved
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+            
             <div className="flex-1 overflow-hidden" ref={scrollAreaRef} onScroll={handleScroll}>
               <div
                 className="scrollbar-gutter-stable scrollbar-thin flex size-full flex-col gap-4 overflow-y-auto overflow-x-hidden
@@ -751,6 +772,11 @@ export default function ChatPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasShownConnection, setHasShownConnection] = useState(false);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const testId = searchParams.get('testId');
+  const [chatResults, setChatResults] = useState<any[]>([]);
+  const [reportSubmitted, setReportSubmitted] = useState(false);
+  const sessionStartTime = useRef(new Date());
   const { toast } = useToast();
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
 
@@ -777,6 +803,25 @@ export default function ChatPage() {
   const processedPauseMessagesRef = useRef<Set<string>>(new Set());
   const lastResumeMessageIdRef = useRef<string | null>(null);
 
+  // Effect to fetch and store user ID when component mounts
+  useEffect(() => {
+    const fetchAndStoreUserId = async () => {
+      try {
+        const supabase = createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        
+        if (user?.id) {
+          localStorage.setItem('user_id', user.id);
+          console.info("👤 User ID stored in localStorage:", user.id);
+        }
+      } catch (error) {
+        console.error("Error fetching user ID:", error);
+      }
+    };
+    
+    fetchAndStoreUserId();
+  }, []);
+
   // Utility functions that need to be defined before they're used
   const checkApiKey = useCallback(() => {
     return true;
@@ -789,35 +834,64 @@ export default function ChatPage() {
 
   // Memoize chatBody config
   const chatBodyConfig = useMemo(
-    () => ({
-      session_id: currentSession?.id,
-      agent_type: currentSettings?.selectedAgent,
-      provider: currentSettings?.selectedProvider,
-      api_key: currentSettings?.providerApiKeys?.[currentSettings?.selectedProvider || ""] || "",
-      model_settings: {
-        model_choice: currentSettings?.selectedModel,
-        max_tokens: Number(currentSettings?.modelSettings.max_tokens),
-        temperature: Number(currentSettings?.modelSettings.temperature),
-        top_p: currentSettings?.modelSettings.top_p
-          ? Number(currentSettings?.modelSettings.top_p)
-          : undefined,
-        top_k: currentSettings?.modelSettings.top_k
-          ? Number(currentSettings?.modelSettings.top_k)
-          : undefined,
-        frequency_penalty: currentSettings?.modelSettings.frequency_penalty
-          ? Number(currentSettings?.modelSettings.frequency_penalty)
-          : undefined,
-        presence_penalty: currentSettings?.modelSettings.presence_penalty
-          ? Number(currentSettings?.modelSettings.presence_penalty)
-          : undefined,
-      },
-      agent_settings: Object.fromEntries(
-        Object.entries(currentSettings?.agentSettings ?? {})
-          .filter(([_, value]) => value !== undefined && !isSettingConfig(value))
-          .map(([key, value]) => [key, typeof value === "string" ? value : Number(value)])
-      ),
-    }),
-    [currentSession?.id, currentSettings, isSettingConfig]
+    () => {
+      // Get the user ID from localStorage if available
+      const userId = typeof window !== 'undefined' ? localStorage.getItem('user_id') : null;
+      
+      // Clean testId to ensure it's a valid UUID string format
+      let cleanTestId: string | undefined = undefined;
+      
+      if (testId) {
+        cleanTestId = testId.replace(/[^a-zA-Z0-9-]/g, '');
+        
+        // Make sure it's in the standard UUID format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+        // If it doesn't have hyphens but is 32 characters, format it properly
+        if (cleanTestId.length === 32 && !cleanTestId.includes('-')) {
+          cleanTestId = [
+            cleanTestId.substring(0, 8),
+            cleanTestId.substring(8, 12),
+            cleanTestId.substring(12, 16),
+            cleanTestId.substring(16, 20),
+            cleanTestId.substring(20)
+          ].join('-');
+        }
+      }
+      
+      return {
+        session_id: currentSession?.id,
+        agent_type: currentSettings?.selectedAgent,
+        provider: currentSettings?.selectedProvider,
+        api_key: currentSettings?.providerApiKeys?.[currentSettings?.selectedProvider || ""] || "",
+        model_settings: {
+          model_choice: currentSettings?.selectedModel,
+          max_tokens: Number(currentSettings?.modelSettings.max_tokens),
+          temperature: Number(currentSettings?.modelSettings.temperature),
+          top_p: currentSettings?.modelSettings.top_p
+            ? Number(currentSettings?.modelSettings.top_p)
+            : undefined,
+          top_k: currentSettings?.modelSettings.top_k
+            ? Number(currentSettings?.modelSettings.top_k)
+            : undefined,
+          frequency_penalty: currentSettings?.modelSettings.frequency_penalty
+            ? Number(currentSettings?.modelSettings.frequency_penalty)
+            : undefined,
+          presence_penalty: currentSettings?.modelSettings.presence_penalty
+            ? Number(currentSettings?.modelSettings.presence_penalty)
+            : undefined,
+        },
+        agent_settings: {
+          ...Object.fromEntries(
+            Object.entries(currentSettings?.agentSettings ?? {})
+              .filter(([_, value]) => value !== undefined && !isSettingConfig(value))
+              .map(([key, value]) => [key, typeof value === "string" ? value : Number(value)])
+          ),
+          // Add test_id and user_id as explicit fields
+          test_id: cleanTestId || undefined,
+          user_id: userId || undefined
+        },
+      };
+    },
+    [currentSession?.id, currentSettings, isSettingConfig, testId]
   );
 
   // Use the custom hook instead of directly using useChat
@@ -1724,31 +1798,380 @@ export default function ChatPage() {
     }
   }, [messages]);
 
+  // Helper function to extract performance report from messages
+  const extractPerformanceReport = (messages: any[]) => {
+    console.log("🔍 Searching for performance report in", messages.length, "messages");
+
+    let performanceReport: string | null = null;
+
+    // Prioritize finding the specific HTML report structure
+    for (const msg of messages.slice().reverse()) { // Check recent messages first
+      if (msg.role === 'assistant' && typeof msg.content === 'string') {
+        // Look for the distinct HTML wrapper used in display_performance_report/force_display_report
+        if (msg.content.includes('<div class="report-container">') || // Check for class used in force_display_report
+            msg.content.includes('🚀 PERFORMANCE REPORT 🚀') || // Check for title used in display_performance_report
+            msg.content.includes('<div style="padding:20px; background:#f5f5f5;') // Check for inline style
+           ) {
+          console.log("✅ Found HTML performance report in message content (Priority 1)");
+          performanceReport = msg.content;
+          break; // Found the best version
+        }
+      }
+    }
+
+    // If HTML report not found, fall back to text markers and tool results
+    if (!performanceReport) {
+      console.log("ℹ️ HTML report not found, checking text markers and tool results...");
+      for (const msg of messages.slice().reverse()) { // Check recent messages first
+        // Check content of messages for text markers
+        if (!performanceReport && msg.content && typeof msg.content === 'string') {
+           if (msg.content.includes('==== FULL PERFORMANCE REPORT ====') ||
+               msg.content.includes('📊 Page Performance Metrics') ||
+               msg.content.includes('⏱️ Timing Metrics') ||
+               msg.content.includes('PERFORMANCE METRICS REPORT')) {
+            console.log("✅ Found text-based performance report in message content (Priority 2)");
+            performanceReport = msg.content;
+            // Don't break yet, check tools in case they have a more complete version
+          }
+        }
+
+        // Check for tool invocations with performance data
+        if (msg.toolInvocations && Array.isArray(msg.toolInvocations)) {
+          for (const tool of msg.toolInvocations) {
+            if (['get_session_summary', 'generate_performance_report', 'show_performance_metrics',
+                 'display_performance_report', 'get_latest_report', 'show_complete_performance_report', 'done'].includes(tool.toolName)) {
+
+              // Check tool result (most likely place)
+              if (tool.result && typeof tool.result === 'string' &&
+                  (tool.result.includes('📊') || tool.result.includes('Performance') || tool.result.includes('Metrics') || tool.result.includes('🚀'))) {
+                console.log(`✅ Found report in tool.result for ${tool.toolName} (Priority 3)`);
+                performanceReport = tool.result; // Overwrite text version if tool result is found
+                break; // Found a good candidate from tools
+              }
+              // Less likely: Check tool args (e.g., the 'done' tool might have it in args)
+              else if (tool.toolName === 'done' && tool.args && typeof tool.args.text === 'string' &&
+                       (tool.args.text.includes('📊') || tool.args.text.includes('Performance') || tool.args.text.includes('Metrics') || tool.args.text.includes('🚀'))) {
+                 console.log(`✅ Found report in tool.args.text for 'done' tool (Priority 4)`);
+                 performanceReport = tool.args.text;
+                 break;
+              }
+            }
+          }
+          if (performanceReport && (performanceReport.includes('📊') || performanceReport.includes('🚀'))) break; // Break outer loop if report found in tools
+        }
+      }
+    }
+
+    // Final check: If still nothing, look for any message containing the performance emoji as a last resort
+    if (!performanceReport) {
+        console.log("ℹ️ No specific report found yet, doing a final check for '📊' emoji...");
+        for (const msg of messages.slice().reverse()) {
+            if (msg.role === 'assistant' && typeof msg.content === 'string' && msg.content.includes('📊')) {
+                console.log("⚠️ Found message with '📊' emoji, using as fallback report (Priority 5)");
+                performanceReport = msg.content;
+                break;
+            }
+        }
+    }
+
+    if (performanceReport) {
+      console.log("📊 Final extracted performance report preview:",
+                   performanceReport.substring(0, 150) + (performanceReport.length > 150 ? "..." : ""));
+    } else {
+      console.warn("⚠️ Could not find any performance report in messages.");
+    }
+
+    return performanceReport;
+  };
+
+  // Function to submit report to backend
+  const submitReport = useCallback(async () => {
+    if (!testId || reportSubmitted) {
+      console.log("🚫 Report submission skipped (no testId or already submitted).");
+      return;
+    }
+    
+    try {
+      console.info("📊 Attempting to submit report for test:", testId);
+      
+      // First, ensure we have the latest messages from the chat
+      console.log("Refreshing messages to ensure we have the latest data");
+      try {
+        await refreshMessages();
+      } catch (refreshError) {
+        console.warn("Failed to refresh messages, continuing with current messages:", refreshError);
+      }
+      
+      // Get current user
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      if (!user) {
+        console.error("No user found when trying to submit report");
+        toast({
+          title: "Authentication Required",
+          description: "Please sign in to submit test results",
+          className: "border border-[--yellow-6] bg-[--yellow-3] text-[--yellow-11]",
+        });
+        return;
+      }
+
+      // Verify that the test belongs to the authenticated user
+      const { data: testData, error: testError } = await supabase
+        .from("tests")
+        .select("id")
+        .eq("id", testId)
+        .eq("user_id", user.id)
+        .single();
+      
+      if (testError || !testData) {
+        console.error("Test verification error:", testError);
+        toast({
+          title: "Permission Error",
+          description: "This test does not belong to your account",
+          className: "border border-[--red-6] bg-[--red-3] text-[--red-11]",
+        });
+        return;
+      }
+      
+      console.info("✅ Test verification successful for user:", user.id);
+
+      // Extract performance report using our enhanced function
+      const performanceReport = extractPerformanceReport(messages);
+      
+      // Format and clean messages
+      const formatMessages = (messages: any[]) => {
+        return messages
+          .filter(msg => {
+            // Skip messages with empty content
+            if (!msg.content || !msg.content.trim()) return false;
+            
+            // Skip special system messages that shouldn't be in the report
+            const isSystemMessage = 
+              msg.role === 'assistant' && 
+              (msg.content.includes('▶️ AI control has been resumed') || 
+               msg.content.includes('⏸️ Pausing execution'));
+               
+            return !isSystemMessage;
+          })
+          .map(msg => ({
+            role: msg.role,
+            content: msg.content.trim(),
+            timestamp: new Date().toISOString()
+          }));
+      };
+      
+      // Format and clean messages
+      const formattedResults = formatMessages(messages);
+      
+      // Add the extracted report to the results with clear markers
+      if (performanceReport) {
+        formattedResults.push({
+          role: "system",
+          content: `[PERFORMANCE_REPORT_START]\n${performanceReport}\n[PERFORMANCE_REPORT_END]`,
+          timestamp: new Date().toISOString()
+        });
+        console.log("✅ Successfully added performance report to results payload.");
+        console.log("📊 Report Preview (first 200 chars):", performanceReport.substring(0, 200));
+      } else {
+        // If no performance report was found, check if there's a message with performance-related content
+        console.warn("⚠️ No performance report found in messages, looking for fallback content...");
+        const possibleReport = messages.find(msg => 
+          msg.content && 
+          typeof msg.content === 'string' && 
+          (msg.content.includes('Performance') || 
+           msg.content.includes('Metrics') || 
+           msg.content.includes('⏱️') || 
+           msg.content.includes('📊'))
+        );
+        
+        if (possibleReport) {
+          console.log("🔍 No explicit performance report found, but found message with performance content");
+          formattedResults.push({
+            role: "system",
+            content: "[POSSIBLE_PERFORMANCE_REPORT]\n" + possibleReport.content,
+            timestamp: new Date().toISOString()
+          });
+        } else {
+          console.warn("⚠️ No performance report or related content found for inclusion.");
+          // Add a basic fallback placeholder
+          formattedResults.push({
+            role: "system",
+            content: "[PERFORMANCE_REPORT_MISSING]\nNo performance report was generated during this test session.",
+            timestamp: new Date().toISOString()
+          });
+        }
+      }
+      
+      // Don't submit if there are no results
+      if (formattedResults.length === 0) {
+        console.warn("No valid results to submit");
+        toast({
+          title: "Cannot Submit Report",
+          description: "No valid messages found to include in report",
+          className: "border border-[--yellow-6] bg-[--yellow-3] text-[--yellow-11]",
+        });
+        return;
+      }
+      
+      setChatResults(formattedResults);
+      
+      // Calculate session duration in seconds
+      const now = new Date();
+      const durationInSeconds = Math.floor((now.getTime() - sessionStartTime.current.getTime()) / 1000);
+
+      // Format test ID as a proper UUID
+      let formattedTestId = testId;
+      
+      // Remove any non-UUID characters
+      formattedTestId = formattedTestId.replace(/[^a-zA-Z0-9-]/g, '');
+      
+      // If it's a UUID without dashes but with the right length, format it correctly
+      if (formattedTestId.length === 32 && !formattedTestId.includes('-')) {
+        formattedTestId = `${formattedTestId.slice(0, 8)}-${formattedTestId.slice(8, 12)}-${formattedTestId.slice(12, 16)}-${formattedTestId.slice(16, 20)}-${formattedTestId.slice(20)}`;
+      }
+      
+      console.log("Using formatted test ID for report:", formattedTestId);
+      
+      console.log("📦 Preparing to save report data:", {
+        test_id: formattedTestId,
+        results_count: formattedResults.length,
+        includes_report: !!performanceReport,
+        duration: durationInSeconds
+      });
+
+      // Format the request in the expected structure
+      const reportData = {
+        test_id: formattedTestId,
+        results: formattedResults,
+        completed_at: now.toISOString(),
+        duration: durationInSeconds,
+        user_id: user.id  // Explicitly set user_id
+      };
+      
+      console.log("Report data ready, contains", formattedResults.length, "messages");
+
+      // Save the report directly to Supabase instead of using the API client
+      const { data, error } = await supabase
+        .from("reports")
+        .insert([reportData])
+        .select();
+        
+      if (error) {
+        console.error("Error saving report to Supabase:", error);
+        throw new Error(`Failed to save report: ${error.message}`);
+      }
+      
+      console.log("✅ Report saved successfully via Supabase:", data);
+      setReportSubmitted(true);
+      
+      toast({
+        title: "Report Submitted",
+        description: "Test results have been saved successfully",
+        className: "border border-[--green-6] bg-[--green-3] text-[--green-11]",
+      });
+      
+    } catch (error: any) {
+      console.error("❌ Error during report submission process:", error);
+      
+      // Try to extract more specific error information
+      let errorMessage = "Failed to submit report results";
+      
+      if (error?.response?.data?.detail) {
+        errorMessage = error.response.data.detail;
+      } else if (error?.message) {
+        errorMessage = error.message;
+      }
+      
+      toast({
+        title: "Error",
+        description: errorMessage,
+        className: "border border-[--red-6] bg-[--red-3] text-[--red-11]",
+      });
+    }
+  }, [testId, reportSubmitted, messages, toast, refreshMessages]);
+
+  // Effect to save report when chat is considered complete
+  useEffect(() => {
+    // Check if chat has meaningful content and if we haven't submitted a report yet
+    if (
+      testId && 
+      !reportSubmitted && 
+      !isLoading && 
+      messages.length > 1 && // At least a user message and a response
+      !isPaused // Not currently paused
+    ) {
+      // Check if the last message indicates completion or contains a report
+      const lastMessage = messages[messages.length - 1];
+      const isLikelyComplete = lastMessage?.role === 'assistant' &&
+                               (lastMessage.content?.includes('✅') || // Task completed message
+                                lastMessage.content?.includes('PERFORMANCE REPORT') || // Contains report
+                                lastMessage.content?.includes('📊')); // Contains report emoji
+
+      if (isLikelyComplete) {
+          console.log("✅ Chat appears complete, scheduling report submission...");
+          // Submit report after a slightly longer delay
+          const timer = setTimeout(() => {
+            // Double-check conditions before submitting
+            if (testId && !reportSubmitted && !isLoading && !isPaused) {
+                 console.log("⏱️ Submitting report after delay.");
+                 submitReport();
+            } else {
+                 console.log("🚫 Report submission cancelled (state changed during delay).");
+            }
+          }, 7000); // 7 second delay after chat appears complete
+
+          return () => clearTimeout(timer);
+      } else {
+          console.log("⏳ Chat not yet considered complete for automatic report submission.");
+      }
+    }
+  }, [testId, reportSubmitted, isLoading, messages, isPaused, submitReport]);
+
+  // Before returning ChatPageContent, add a button to manually submit report if needed
+  const chatPageContentProps = {
+    messages,
+    isLoading,
+    input,
+    handleInputChange,
+    handleSubmit,
+    handleStop,
+    reload,
+    isCreatingSession,
+    hasShownConnection,
+    currentSession,
+    isExpired,
+    handleNewChat,
+    handleImageClick,
+    setMessages,
+    isAtBottom,
+    scrollAreaRef,
+    handleScroll,
+    removeIncompleteToolCalls,
+    stop,
+    handleSend,
+    isPaused,
+    resumeLoading,
+    handleResume,
+    testId,
+    onSubmitReport: submitReport,
+    reportSubmitted,
+  };
+
   return (
-    <ChatPageContent
-      messages={messages}
-      isLoading={isLoading}
-      input={input}
-      handleInputChange={handleInputChange}
-      handleSubmit={handleSubmit}
-      handleStop={handleStop}
-      reload={reload}
-      isCreatingSession={isCreatingSession}
-      hasShownConnection={hasShownConnection}
-      currentSession={currentSession}
-      isExpired={isExpired}
-      handleNewChat={handleNewChat}
-      handleImageClick={handleImageClick}
-      setMessages={setMessages}
-      isAtBottom={isAtBottom}
-      scrollAreaRef={scrollAreaRef}
-      handleScroll={handleScroll}
-      removeIncompleteToolCalls={removeIncompleteToolCalls}
-      stop={stop}
-      handleSend={handleSend}
-      isPaused={isPaused}
-      resumeLoading={resumeLoading}
-      handleResume={handleResume}
-    />
+    <>
+      <ChatPageContent {...chatPageContentProps} />
+      {testId && !reportSubmitted && !isLoading && messages.length > 1 && (
+        <div className="fixed bottom-4 right-4 z-50">
+          <Button 
+            onClick={submitReport}
+            className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white shadow-lg"
+            title="Manually save the test results including the performance report"
+          >
+            Save Test Results
+          </Button>
+        </div>
+      )}
+    </>
   );
 }

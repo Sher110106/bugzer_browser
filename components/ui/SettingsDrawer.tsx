@@ -603,14 +603,7 @@ function SettingsContent({ closeSettings }: { closeSettings: () => void }) {
                       Ollama is a self-hosted solution that requires running the app locally.
                     </p>
                     <p className="mb-2 text-sm text-[--gray-11]">
-                      1. Clone and run surf.new locally first:
-                      <code className="mt-1 block rounded bg-[--gray-4] p-1 text-xs">
-                        git clone https://github.com/steel-dev/surf.new cd surf.new npm install npm
-                        run dev
-                      </code>
-                    </p>
-                    <p className="mb-2 text-sm text-[--gray-11]">
-                      2. Install Ollama from{" "}
+                      1. Install Ollama from{" "}
                       <span className="cursor-not-allowed text-[--blue-11]">ollama.com</span>
                     </p>
                     <p className="mb-2 text-sm text-[--gray-11]">
@@ -648,9 +641,6 @@ function SettingsContent({ closeSettings }: { closeSettings: () => void }) {
                       <code className="mt-1 block rounded bg-[--gray-4] p-1 text-xs">
                         ollama run {currentSettings.selectedModel || "MODEL_NAME"}
                       </code>
-                    </p>
-                    <p className="text-sm text-[--gray-11]">
-                      3. Surf.new will connect to your local Ollama instance automatically
                     </p>
                   </>
                 )}

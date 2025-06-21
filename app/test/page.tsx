@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
 
 import { AuthModal } from "@/components/ui/AuthModal";
 import { ChatInput } from "@/components/ui/ChatInput";
@@ -17,9 +18,12 @@ import Clouds from "@/public/clouds.png";
 import { useChatContext } from "../contexts/ChatContext";
 import { useSettings } from "../contexts/SettingsContext";
 import { useSteelContext } from "../contexts/SteelContext";
+import { apiClient } from "@/utils/api-client";
+import { createClient } from "@/utils/supabase/client";
 
 export default function Home() {
   const router = useRouter();
+  
   const { resetSession } = useSteelContext();
   const { setInitialMessage, clearInitialState } = useChatContext();
   const { currentSettings, updateSettings } = useSettings();
@@ -30,6 +34,7 @@ export default function Home() {
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   // Store the pending query when waiting for API key
   const pendingQueryRef = useRef<string>("");
+  const [error, setError] = useState("");
 
   // Clear all state on mount
   useEffect(() => {
@@ -80,9 +85,9 @@ export default function Home() {
       proceedToChat(pendingQueryRef.current);
     }
   };
-  const proceedToChat = (queryText: string) => {
+  const proceedToChat = (queryText: string, testId?: string) => {
     setInitialMessage(queryText);
-    router.push(`/chat`);
+    router.push(`/chat${testId ? `?testId=${testId}` : ''}`);
   };
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -107,10 +112,31 @@ export default function Home() {
         }
         return;
       }
-      proceedToChat(query);
+
+      // Create a test using the API client
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+
+      if (!user) {
+        router.push('/sign-in');
+        return;
+      }
+
+      // Use the query as both the URL and test context
+      const response = await apiClient.createTest({
+        url: query,
+        context: query
+      }) as { id: string };
+
+      // Get the test ID from the response
+      const testId = response.id;
+      
+      // Proceed to chat with the test ID
+      proceedToChat(query, testId);
     } catch (err) {
       console.error("Error creating session:", err);
-      alert("Failed to create session. Please try again.");
+      setError("Failed to create session or test. Please try again.");
+      proceedToChat(query); // Fall back to proceeding without test ID
     } finally {
       setLoading(false);
     }
@@ -119,20 +145,20 @@ export default function Home() {
   const starterButtons = [
     {
       icon: "/icons/pixel_plane.svg",
-      title: "Scrape & Compare",
-      text: "Find me the cheapest one-way flight from San Francisco to Tokyo next week.",
+      title: "Session Summary",
+      text: "Summarize the session with the user.",
       iconBgColor: "text-[--blue-9]",
     },
     {
       icon: "/icons/pixel_square.svg",
       title: "Collect a List",
-      text: "Go to Hacker News and summarize the top 5 stories for me.",
+      text: "Collect a list of all the links the user has clicked on.",
       iconBgColor: "text-[--yellow-9]",
     },
     {
       icon: "/icons/pixel_dollar.svg",
-      title: "Investigate for me",
-      text: "Investigate the trade-in value for iPhone 13 Pro Max on apple.com",
+      title: "Get Performance Metrics",
+      text: "Get performance metrics for the user's session.",
       iconBgColor: "text-[--blue-9]",
     },
   ];
@@ -167,6 +193,12 @@ export default function Home() {
                 placeholder="What is on your mind?"
               />
             </div>
+            <Link href='/batch-request'>
+              <Button>
+                Submit Batch Request
+
+              </Button>
+            </Link>
           </div>
           {/* Starter Buttons */}
           <div className="mt-4 flex gap-4 overflow-x-auto pb-4 md:flex-col md:overflow-x-visible md:pb-0">
@@ -218,6 +250,11 @@ export default function Home() {
               </Link>
             ))}
           </div>
+          {error && (
+            <div className="mt-4 p-3 rounded bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+              {error}
+            </div>
+          )}
         </div>
       </div>
       {/* Add API Key Modal */}

@@ -21,7 +21,6 @@ class WebAgentType(Enum):
     BASE = "base"
     EXAMPLE = "example"
     BROWSER_USE = "browser_use_agent"
-    BROWSER_USE_BATCH = "browser_use_batch"
 
 
 class SettingType(Enum):
@@ -119,56 +118,18 @@ AGENT_CONFIGS = {
             },
         },
     },
-    WebAgentType.BROWSER_USE_BATCH.value: {
-        "name": "Browser Agent (Batch)",
-        "description": "Non-streaming browser agent that runs to completion",
-        "supported_models": [
-            {
-                "provider": ModelProvider.AZURE_OPENAI.value,
-                "models": ["gpt-4o", "gpt-4o-mini"],
-            },
-        ],
-        "model_settings": {
-            "max_tokens": {
-                "type": SettingType.INTEGER.value,
-                "default": 1000,
-                "min": 1,
-                "max": 4096,
-                "description": "Maximum number of tokens to generate",
-            },
-            "temperature": {
-                "type": SettingType.FLOAT.value,
-                "default": 0.7,
-                "min": 0,
-                "max": 1,
-                "step": 0.05,
-                "description": "Controls randomness in the output",
-            },
-        },
-        "agent_settings": {
-            "steps": {
-                "type": SettingType.INTEGER.value,
-                "default": 125,  # More steps for batch mode since we don't need to wait for streaming
-                "min": 10,
-                "max": 150,
-                "description": "Max number of steps to take",
-            },
-        },
-    },
 }
 
 
 def get_web_agent(
     name: WebAgentType,
 ) -> Callable[
-    [ModelConfig, AgentSettings, List[Mapping[str, Any]], str], Union[AsyncIterator[str], str]
+    [ModelConfig, AgentSettings, List[Mapping[str, Any]], str], AsyncIterator[str]
 ]:
     if name == WebAgentType.BASE:
         return base_agent
     elif name == WebAgentType.BROWSER_USE:
         return browser_use_agent
-    elif name == WebAgentType.BROWSER_USE_BATCH:
-        return browser_use_agent_batch
     else:
         raise ValueError(f"Invalid agent type: {name}")
 

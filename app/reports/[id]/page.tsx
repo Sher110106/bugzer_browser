@@ -32,6 +32,7 @@ export default async function ReportDetailPage({
     if (!report) {
       return redirect("/reports");
     }
+    console.log("report", report);
 
     return <ReportDetails report={report} />;
   } catch (error) {

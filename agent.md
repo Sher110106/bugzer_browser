@@ -19,7 +19,7 @@ async def browser_use_agent_batch(
     # ...
 ```
 
-## 2. Modify Agent Execution Flow
+## 2. Modify Agent Execution Flow for batch based request
 
 ### 2.1 Replace Async Generator with Async Function
 - Change return type from `AsyncIterator[str]` to `str` for the final report
@@ -129,7 +129,7 @@ async def run_browser_agent_batch(
         
         # Create a unique session ID from the test ID
         session_id = f"batch_{test_id}"
-        
+        console.log(session_id)
         # Create a timeout mechanism
         timeout = request.timeout or 300  # default 5 minutes
         

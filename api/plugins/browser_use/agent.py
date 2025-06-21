@@ -887,6 +887,27 @@ async def get_session_summary() -> str:
 
 =================================================="""
         
+
+        # DIRECTLY PUT THE SUMMARY ON THE QUEUE
+        logger.info("📊 Directly adding performance report to global queue")
+        try:
+            # Create a properly formatted message with the summary
+            report_message = AIMessage(content=f"*Performance Report*:\n{formatted_summary}")
+            
+            # Put it on the queue using call_soon_threadsafe to ensure thread safety
+            asyncio.get_event_loop().call_soon_threadsafe(
+                queue.put_nowait, report_message
+            )
+            
+            # Add a stop signal to ensure proper handling
+            asyncio.get_event_loop().call_soon_threadsafe(
+                queue.put_nowait, {"stop": True}
+            )
+            
+            logger.info("✅ Successfully added performance report to queue")
+        except Exception as e:
+            logger.error(f"❌ Error adding report to queue: {str(e)}")
+        
         return formatted_summary
         
     except Exception as e:
@@ -933,7 +954,9 @@ async def get_session_summary() -> str:
         # Store the error report for consistency
         if page:
             controller._store_metric(page.url, "full_report", error_report)
-            
+        
+        # Even on error, try to put the error report on the queue
+       
         return error_report
 
 @controller.action('Show performance metrics')
@@ -1584,7 +1607,6 @@ async def inject_monitoring_scripts(page):
     try:
         await page.evaluate("""() => {
             // Create a namespace for the browser-use monitoring tools
-            // Only initialize if it doesn't exist yet
             if (!window.__BROWSER_USE_MONITOR) {
                 window.__BROWSER_USE_MONITOR = {
                     networkRequests: [],
@@ -1834,11 +1856,32 @@ async def generate_performance_report() -> str:
     try:
         # Run get_session_summary with a timeout
         result = await run_get_session_summary_with_timeout()
+        
+        # Add test ID and user ID information if available
+        session_data = controller._get_current_session_metrics()
+        test_id = session_data.get("test_id")
+        
+        # Add test information to the report if available
+        if result and (test_id ):
+            test_info = "\n\n--- Test Information ---\n"
+            if test_id:
+                test_info += f"Test ID: {test_id}\n"
+            
+            
         if result:
             return result
         else:
             # Fallback to get_latest_report if get_session_summary fails
-            return get_latest_report()
+            report = get_latest_report()
+            
+            # Add test information to the fallback report if available
+            if report and (test_id ):
+                test_info = "\n\n--- Test Information ---\n"
+                if test_id:
+                    test_info += f"Test ID: {test_id}\n"
+                
+                
+            return report
     except Exception as e:
         logger.error(f"❌ Error in generate_performance_report: {str(e)}")
         return f"""📊 Page Performance Summary:
@@ -1875,7 +1918,6 @@ No detailed performance metrics available.
 ⚠️ Error retrieving performance data: {str(e)}
 
 🔍 Please try running "Get session exploration summary" again."""
-
 @controller.action('Show complete performance report')
 def show_complete_performance_report() -> str:
     """Retrieves or generates a complete performance report to show the user."""
@@ -1929,6 +1971,18 @@ def display_performance_report() -> str:
         session_data = controller._get_current_session_metrics()
         pages = session_data.get("pages", {})
         
+        # Get test ID and user ID information if available
+        test_id = session_data.get("test_id")
+        
+        # Prepare test information section if available
+        test_info_html = ""
+        if test_id: 
+            test_info_html = "<div style='margin-top:15px; padding:10px; background:#f0f7ff; border-radius:5px;'><h3 style='margin:0 0 10px 0; color:#0053b3;'>Test Information</h3>"
+            if test_id:
+                test_info_html += f"<p style='margin:5px 0;'><strong>Test ID:</strong> {test_id}</p>"
+            
+            test_info_html += "</div>"
+        
         # Look for any report
         for url, page_data in pages.items():
             if "full_report" in page_data:
@@ -1939,6 +1993,7 @@ def display_performance_report() -> str:
                 report_message = f"""
 <div style="padding:20px; background:#f5f5f5; border:2px solid #ccc; border-radius:10px; margin:20px 0;">
     <h2 style="color:#2c3e50; text-align:center; border-bottom:1px solid #ccc; padding-bottom:10px; margin-bottom:15px;">🚀 PERFORMANCE REPORT 🚀</h2>
+    {test_info_html}
     <pre style="white-space:pre-wrap; font-family:monospace; background:#fff; padding:15px; border-radius:5px; font-size:14px; line-height:1.4;">
 {full_report}
     </pre>
@@ -1956,6 +2011,7 @@ def display_performance_report() -> str:
                 report_message = f"""
 <div style="padding:20px; background:#f5f5f5; border:2px solid #ccc; border-radius:10px; margin:20px 0;">
     <h2 style="color:#2c3e50; text-align:center; border-bottom:1px solid #ccc; padding-bottom:10px; margin-bottom:15px;">🚀 PERFORMANCE REPORT 🚀</h2>
+    {test_info_html}
     <pre style="white-space:pre-wrap; font-family:monospace; background:#fff; padding:15px; border-radius:5px; font-size:14px; line-height:1.4;">
 {report}
     </pre>
@@ -1967,9 +2023,10 @@ def display_performance_report() -> str:
             logger.error(f"❌ Error generating report for force-display: {str(e)}")
         
         # Return a basic message if no report found
-        return """
+        return f"""
 <div style="padding:20px; background:#f5f5f5; border:2px solid #ccc; border-radius:10px; margin:20px 0;">
     <h2 style="color:#2c3e50; text-align:center; border-bottom:1px solid #ccc; padding-bottom:10px; margin-bottom:15px;">🚀 PERFORMANCE REPORT 🚀</h2>
+    {test_info_html}
     <p style="font-size:16px; line-height:1.5; text-align:center;">
         No performance report has been generated yet.<br/>
         Try running "Get session exploration summary" to generate metrics.
@@ -2069,234 +2126,3 @@ def force_display_report():
     except Exception as e:
         logger.error(f"❌ Error in force_display_report: {str(e)}")
         return f"Error displaying performance report: {str(e)}"
-
-async def browser_use_agent_batch(
-    model_config: ModelConfig,
-    agent_settings: AgentSettings,
-    history: List[Mapping[str, Any]],
-    session_id: str,
-) -> str:
-    """
-    Non-streaming version of browser_use_agent that runs autonomously
-    and returns the final report as a single string.
-    """
-    global _agent_resumed
-    global session_metrics_storage
-    
-    logger.info("🚀 Starting browser_use_agent_batch with session_id: %s", session_id)
-    logger.info("🔧 Model config: %s", model_config)
-    logger.info("⚙️ Agent settings: %s", agent_settings)
-
-    # Data collection container instead of a queue
-    collected_data = {
-        "metrics": {},
-        "anomalies": {},
-        "screenshots": {},
-        "final_report": None,
-        "memory": None,
-        "goals": []
-    }
-
-    # --- Robust History Check ---
-    if not history:
-        logger.error("❌ Error in browser_use_agent_batch: History list is empty.")
-        return "Error: Task history is empty."
-    if not isinstance(history[-1], dict):
-        logger.error(f"❌ Error in browser_use_agent_batch: Last history item is not a dictionary. Got: {type(history[-1])}")
-        return f"Error: Invalid history format (last item type: {type(history[-1])})."
-    if "content" not in history[-1]:
-        logger.error(f"❌ Error in browser_use_agent_batch: Last history item is missing 'content' key. Got keys: {history[-1].keys()}")
-        return "Error: Invalid history format (missing 'content' key)."
-    if not isinstance(history[-1]["content"], str):
-        logger.error(f"❌ Error in browser_use_agent_batch: History 'content' is not a string. Got type: {type(history[-1]['content'])}")
-        return f"Error: Invalid history format (content type: {type(history[-1]['content'])})."
-
-    task_description = history[-1]["content"]
-    logger.info(f"✅ Extracted task description: {task_description[:100]}...")
-    # --- End Robust History Check ---
-
-    # Reset static variables for yield_data function
-    if hasattr(yield_data, "_done_processed"):
-        yield_data._done_processed = False
-        logger.info("🔄 Reset yield_data._done_processed flag")
-
-    # Clear previous metrics for this session ID at the start of a new run
-    if session_id in session_metrics_storage:
-        logger.info("🧹 Clearing previous session metrics for session_id: %s", session_id)
-        del session_metrics_storage[session_id]
-    # Re-initialize defaultdict entry
-    session_metrics_storage[session_id]
-
-    llm, use_vision = create_llm(model_config)
-    logger.info("🤖 Created LLM instance")
-
-    # Set the session_id in the controller
-    controller.set_session_id(session_id) # This will also ensure the session exists in storage
-    
-    # Explicitly reset the finished flag for this run
-    controller.finished = False
-    logger.info("🔄 Explicitly reset controller.finished flag for new agent run")
-    
-    # Reset the resumed flag at the start of a new session
-    _agent_resumed = False
-
-    browser = None
-    browser_context = None
-
-    try:
-        # Create a new browser instance (always new for batch mode)
-        logger.info("🌐 Creating new browser for batch session: %s", session_id)
-        browser = Browser(
-            BrowserConfig(
-                cdp_url=f"{STEEL_CONNECT_URL}?apiKey={STEEL_API_KEY}&sessionId={session_id}"
-            )
-        )
-        # Use our custom browser context
-        browser_context = BrowserContext(browser=browser)
-        
-        # Store for use during this batch session
-        active_browsers[session_id] = browser
-        active_browser_contexts[session_id] = browser_context
-        
-        # Set up monitoring hooks
-        await setup_browser_monitoring_hooks(browser_context)
-
-        # Define batch-specific callbacks
-        def batch_yield_data(browser_state, agent_output, step_number):
-            """Callback for each step - store data instead of yielding"""
-            try:
-                logger.info(f"🔄 batch_yield_data called for step {step_number}")
-                
-                # Store memory if available
-                if agent_output.current_state.memory:
-                    collected_data["memory"] = agent_output.current_state.memory
-                    logger.info("✅ Stored memory")
-                
-                # Store previous goal
-                if step_number > 2 and agent_output.current_state.evaluation_previous_goal:
-                    collected_data["goals"].append({
-                        "type": "previous",
-                        "content": agent_output.current_state.evaluation_previous_goal,
-                        "step": step_number
-                    })
-                    logger.info("✅ Stored previous goal")
-                
-                # Store next goal
-                if agent_output.current_state.next_goal:
-                    collected_data["goals"].append({
-                        "type": "next",
-                        "content": agent_output.current_state.next_goal,
-                        "step": step_number
-                    })
-                    logger.info("✅ Stored next goal")
-                
-                # Check for done action
-                for action_model in agent_output.action:
-                    for key, value in action_model.model_dump().items():
-                        if key == "done" and value:
-                            # Set controller as finished
-                            controller.finished = True
-                            logger.info("✅ Marked agent as finished from batch_yield_data")
-                
-            except Exception as e:
-                logger.error(f"❌ Error in batch_yield_data: {str(e)}")
-
-        def batch_yield_done(history):
-            """Callback when the agent completes - generate and store final report"""
-            try:
-                logger.info("✅ Agent completed task, generating final report")
-                
-                # Mark controller as finished
-                controller.finished = True
-                
-                # Generate the report
-                try:
-                    report = display_performance_report()
-                    collected_data["final_report"] = report
-                    logger.info("📊 Generated and stored final performance report")
-                except Exception as e:
-                    logger.error(f"❌ Error generating report in batch_yield_done: {str(e)}")
-                    # Create a basic report on error
-                    collected_data["final_report"] = f"Error generating final report: {str(e)}"
-                
-            except Exception as e:
-                logger.error(f"❌ Error in batch_yield_done: {str(e)}")
-
-        # Create agent with batch callbacks
-        agent = Agent(
-            llm=llm,
-            task=history[-1]["content"],
-            controller=controller,
-            browser=browser,
-            browser_context=browser_context,
-            generate_gif=False,
-            use_vision=use_vision,
-            register_new_step_callback=batch_yield_data,
-            register_done_callback=batch_yield_done,
-            system_prompt_class=ExtendedSystemPrompt,
-        )
-        logger.info("🌐 Created Agent with browser instance for batch mode (use_vision=%s)", use_vision)
-
-        # Set the agent in the controller
-        controller.set_agent(agent)
-
-        # Get steps from settings
-        steps = agent_settings.steps or 25
-        logger.info(f"▶️ Running batch agent with {steps} steps using task: {task_description[:100]}...") # Log task usage
-
-        # Run the agent and wait for completion
-        await agent.run(steps)
-        logger.info("✅ Agent run completed")
-        
-        # Ensure we have a final report
-        if not collected_data["final_report"]:
-            logger.info("📊 Generating final report after agent completion")
-            try:
-                # Use our existing report generation function
-                collected_data["final_report"] = force_display_report()
-            except Exception as e:
-                logger.error(f"❌ Error generating force_display_report: {str(e)}")
-                collected_data["final_report"] = "Error generating performance report after completion."
-        
-        # Return the final report
-        logger.info("📄 Returning final report (length: %d)", 
-                    len(collected_data["final_report"]) if collected_data["final_report"] else 0)
-        return collected_data["final_report"]
-        
-    except Exception as e:
-        logger.error(f"❌ Error in browser_use_agent_batch: {str(e)}")
-        error_report = f"Error during batch execution: {str(e)}\n\n"
-        
-        # Try to get a basic report even on error
-        try:
-            basic_report = force_display_report()
-            error_report += basic_report
-        except Exception as report_error:
-            error_report += f"Additionally, failed to generate error report: {str(report_error)}"
-        
-        return error_report
-        
-    finally:
-        # Close browser and clean up resources
-        try:
-            if browser:
-                await browser.close()
-                logger.info(f"✅ Browser closed for batch session {session_id}")
-        except Exception as e:
-            logger.error(f"❌ Error closing browser: {str(e)}")
-        
-        # Remove from active browsers dictionary
-        if session_id in active_browsers:
-            del active_browsers[session_id]
-            logger.info(f"✅ Removed session {session_id} from active_browsers")
-            
-        if session_id in active_browser_contexts:
-            del active_browser_contexts[session_id]
-            logger.info(f"✅ Removed session {session_id} from active_browser_contexts")
-        
-        # Reset controller status for this session
-        if controller.session_id == session_id:
-            controller.finished = False
-            logger.info(f"✅ Reset controller.finished for session {session_id}")
-        
-        logger.info(f"✅ Batch agent execution complete for session {session_id}")

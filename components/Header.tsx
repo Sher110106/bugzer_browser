@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { Button } from './ui/button'
-import { Menu, X, BarChart2, ActivitySquare } from 'lucide-react'
+import { Menu, X, BarChart2 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { createClient } from '@/utils/supabase/client'
 import { usePathname, useRouter } from 'next/navigation'
@@ -63,11 +63,6 @@ export function Header() {
       href: '/reports',
       label: 'Reports',
       icon: <BarChart2 className="w-4 h-4" />
-    },
-    {
-      href: '/batch-request',
-      label: 'Batch Analysis',
-      icon: <ActivitySquare className="w-4 h-4" />
     }
   ]
 

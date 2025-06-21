@@ -20,7 +20,8 @@ export const apiClient = {
    */
   async fetch<T>(
     endpoint: string, 
-    options: RequestInit = {}
+    options: RequestInit = {},
+    parseResponse: boolean = true
   ): Promise<T> {
     const token = await this.getAuthToken();
     
@@ -45,10 +46,35 @@ export const apiClient = {
     const response = await fetch(`${API_BASE_URL}${endpoint}`, fetchOptions);
     
     if (!response.ok) {
-      throw new Error(`API error: ${response.status} ${response.statusText}`);
+      let errorText = await response.text();
+      try {
+        // Try to parse the error as JSON
+        const errorJson = JSON.parse(errorText);
+        throw new Error(errorJson.detail || `API error: ${response.status} ${response.statusText}`);
+      } catch (e) {
+        // If parsing fails, use the raw error text
+        throw new Error(`API error: ${response.status} ${response.statusText} - ${errorText}`);
+      }
     }
     
-    return response.json();
+    if (!parseResponse) {
+      return { success: true } as T;
+    }
+    
+    // Try to get text content first
+    const textResponse = await response.text();
+    
+    // If the response is empty, return a simple success object
+    if (!textResponse || textResponse.trim() === '') {
+      return { success: true } as T;
+    }
+    
+    // Try to parse as JSON, but return raw response if that fails
+    try {
+      return JSON.parse(textResponse);
+    } catch (e) {
+      return { success: true, message: textResponse } as T;
+    }
   },
 
   // Tests API
@@ -96,11 +122,29 @@ export const apiClient = {
     results: any; 
     completed_at?: string; 
     duration?: number;
+    user_id?: string;
   }) {
+    // Format the test_id as a proper UUID if needed
+    let formattedTestId = data.test_id;
+    
+    // Remove any non-UUID characters
+    formattedTestId = formattedTestId.replace(/[^a-zA-Z0-9-]/g, '');
+    
+    // If it's a UUID without dashes but with the right length, format it correctly
+    if (formattedTestId.length === 32 && !formattedTestId.includes('-')) {
+      formattedTestId = `${formattedTestId.slice(0, 8)}-${formattedTestId.slice(8, 12)}-${formattedTestId.slice(12, 16)}-${formattedTestId.slice(16, 20)}-${formattedTestId.slice(20)}`;
+    }
+    
+    const cleanData = {
+      ...data,
+      test_id: formattedTestId
+    };
+    
+    // Use enhanced fetch with parseResponse=false to avoid UUID serialization issues
     return this.fetch('/reports', {
       method: 'POST',
-      body: JSON.stringify(data),
-    });
+      body: JSON.stringify(cleanData),
+    }, false);
   },
 
   async deleteReport(reportId: string) {
