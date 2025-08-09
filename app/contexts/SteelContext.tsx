@@ -20,6 +20,7 @@ interface SteelContextType {
   createSession: () => Promise<Steel.Session | null>;
   isCreatingSession: boolean;
   resetSession: () => Promise<void>;
+  releaseSession: (sessionId: string) => Promise<void>;
   isExpired: boolean;
   maxSessionDuration: number;
 }
@@ -198,10 +199,11 @@ export function SteelProvider({ children }: { children: React.ReactNode }) {
       createSession,
       isCreatingSession,
       resetSession,
+      releaseSession,
       isExpired,
       maxSessionDuration: MAX_SESSION_DURATION,
     };
-  }, [currentSession, createSession, isCreatingSession, resetSession, isExpired]);
+  }, [currentSession, createSession, isCreatingSession, resetSession, releaseSession, isExpired]);
 
   return (
     <SteelContext.Provider value={contextValue}>

@@ -15,6 +15,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+async def empty_stream() -> AsyncGenerator[str, None]:
+    """
+    Returns an empty async generator that yields nothing.
+    Used when we need to return a valid stream but have no content to stream.
+    """
+    return
+    yield  # This line is unreachable but satisfies the type checker
+
+
 async def stream_vercel_format(
     stream: AsyncGenerator[str, None],
 ) -> AsyncGenerator[str, None]:

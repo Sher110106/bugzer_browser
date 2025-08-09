@@ -204,33 +204,38 @@ function SettingsContent({ closeSettings }: { closeSettings: () => void }) {
 
   // Handle initial agent selection
   useEffect(() => {
-    if (agents && (!currentSettings?.selectedAgent || !agents[currentSettings.selectedAgent])) {
-      const firstAgentKey = Object.keys(agents)[0];
-      const defaultProvider = agents[firstAgentKey].supported_models[0].provider;
-      const defaultModel = agents[firstAgentKey].supported_models[0].models[0];
-      const defaultModelSettings = Object.entries(agents[firstAgentKey].model_settings).reduce(
-        (acc, [key, value]) => {
-          acc[key] = (value as SettingConfig).default as number | string;
-          return acc;
-        },
-        {} as ModelSettings
-      );
-      const defaultAgentSettings = Object.entries(agents[firstAgentKey].agent_settings).reduce(
-        (acc, [key, value]) => {
-          acc[key] = (value as SettingConfig).default as number | string;
-          return acc;
-        },
-        {} as AgentSettings
-      );
+    if (agents && (!currentSettings?.selectedAgent || !agents.agents?.[currentSettings.selectedAgent])) {
+      const agentsData = agents.agents || agents; // Handle both wrapped and unwrapped responses
+      const firstAgentKey = Object.keys(agentsData)[0];
+      const firstAgent = agentsData[firstAgentKey];
+      
+      if (firstAgent && firstAgent.supported_models && firstAgent.supported_models.length > 0) {
+        const defaultProvider = firstAgent.supported_models[0].provider;
+        const defaultModel = firstAgent.supported_models[0].models[0];
+        const defaultModelSettings = Object.entries(firstAgent.model_settings || {}).reduce(
+          (acc, [key, value]) => {
+            acc[key] = (value as SettingConfig).default as number | string;
+            return acc;
+          },
+          {} as ModelSettings
+        );
+        const defaultAgentSettings = Object.entries(firstAgent.agent_settings || {}).reduce(
+          (acc, [key, value]) => {
+            acc[key] = (value as SettingConfig).default as number | string;
+            return acc;
+          },
+          {} as AgentSettings
+        );
 
-      updateSettings({
-        selectedAgent: firstAgentKey,
-        selectedProvider: defaultProvider,
-        selectedModel: defaultModel,
-        modelSettings: defaultModelSettings,
-        agentSettings: defaultAgentSettings,
-        providerApiKeys: currentSettings?.providerApiKeys || {},
-      });
+        updateSettings({
+          selectedAgent: firstAgentKey,
+          selectedProvider: defaultProvider,
+          selectedModel: defaultModel,
+          modelSettings: defaultModelSettings,
+          agentSettings: defaultAgentSettings,
+          providerApiKeys: currentSettings?.providerApiKeys || {},
+        });
+      }
     }
   }, [agents, currentSettings?.selectedAgent, updateSettings]);
 
@@ -239,22 +244,26 @@ function SettingsContent({ closeSettings }: { closeSettings: () => void }) {
     if (
       agents &&
       currentSettings?.selectedAgent &&
-      currentSettings?.selectedProvider &&
-      agents[currentSettings.selectedAgent]
+      currentSettings?.selectedProvider
     ) {
-      const providerModels = (agents[currentSettings.selectedAgent] as Agent).supported_models.find(
-        (m: SupportedModel) => m.provider === currentSettings.selectedProvider
-      );
+      const agentsData = agents.agents || agents; // Handle both wrapped and unwrapped responses
+      const selectedAgent = agentsData[currentSettings.selectedAgent];
+      
+      if (selectedAgent) {
+        const providerModels = (selectedAgent as Agent).supported_models.find(
+          (m: SupportedModel) => m.provider === currentSettings.selectedProvider
+        );
 
-      if (
-        providerModels &&
-        providerModels.models.length > 0 &&
-        !providerModels.models.includes(currentSettings.selectedModel)
-      ) {
-        updateSettings({
-          ...currentSettings,
-          selectedModel: providerModels.models[0],
-        });
+        if (
+          providerModels &&
+          providerModels.models.length > 0 &&
+          !providerModels.models.includes(currentSettings.selectedModel)
+        ) {
+          updateSettings({
+            ...currentSettings,
+            selectedModel: providerModels.models[0],
+          });
+        }
       }
     }
   }, [
@@ -318,7 +327,8 @@ function SettingsContent({ closeSettings }: { closeSettings: () => void }) {
     );
   }
 
-  const currentAgent = agents[currentSettings.selectedAgent] as Agent;
+  const agentsData = agents.agents || agents; // Handle both wrapped and unwrapped responses
+  const currentAgent = agentsData[currentSettings.selectedAgent] as Agent;
 
   return (
     <SheetContent
@@ -355,7 +365,7 @@ function SettingsContent({ closeSettings }: { closeSettings: () => void }) {
           <Select
             value={currentSettings.selectedAgent}
             onValueChange={value => {
-              const agent = agents[value] as Agent;
+              const agent = agentsData[value] as Agent;
               const defaultProvider = agent.supported_models[0].provider;
 
               // If default provider is Ollama and not running locally, use the second provider
@@ -398,13 +408,13 @@ function SettingsContent({ closeSettings }: { closeSettings: () => void }) {
                 });
               }
             }}
-            disabled={Object.keys(agents).length === 0}
+            disabled={Object.keys(agentsData).length === 0}
           >
             <SelectTrigger className="settings-input">
               <SelectValue placeholder="Select an agent" />
             </SelectTrigger>
             <SelectContent className="settings-input border border-[--gray-3] bg-[--gray-1] text-[--gray-11]">
-              {Object.entries(agents).map(([key, agent]) => (
+              {Object.entries(agentsData).map(([key, agent]) => (
                 <SelectItem key={key} value={key}>
                   {(agent as Agent).name} - {(agent as Agent).description}
                 </SelectItem>

@@ -6,7 +6,7 @@ from .schemas import ChatRequest, SessionRequest
 from .utils.prompt import convert_to_chat_messages
 from .models import ModelConfig
 from .plugins import WebAgentType, get_web_agent, AGENT_CONFIGS
-from .streamer import stream_vercel_format
+from .streamer import stream_vercel_format, empty_stream
 from api.middleware.profiling_middleware import ProfilingMiddleware
 from pydantic import BaseModel
 from typing import List, Dict
@@ -325,9 +325,28 @@ async def handle_chat(request: ChatRequest):
 @app.get("/api/agents", tags=["Agents"])
 async def get_available_agents():
     """
-    Returns all available agents and their configurations.
+    Returns available agent configurations.
     """
-    return AGENT_CONFIGS
+    return {"agents": AGENT_CONFIGS}
+
+@app.get("/api/ollama/models", tags=["Ollama"])
+async def get_ollama_models():
+    """
+    Returns available Ollama models.
+    """
+    try:
+        # Try to connect to local Ollama instance
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get("http://localhost:11434/api/tags")
+            if response.status_code == 200:
+                data = response.json()
+                return {"models": data.get("models", [])}
+            else:
+                return {"models": [], "error": "Ollama not running"}
+    except Exception as e:
+        logger.warning(f"Failed to fetch Ollama models: {e}")
+        return {"models": [], "error": "Ollama not available"}
 
 
 @app.get("/healthcheck", tags=["System"])

@@ -1475,12 +1475,30 @@ async def browser_use_agent(
                 logger.info("⏳ Waiting a short time before stopping agent...")
                 await asyncio.sleep(0.5)
                 
-                # Now force stop agent
+                # Now force stop agent and terminate session
                 try:
                     logger.info("🛑 Forcing agent to stop after yielding report")
                     # Terminate the task after yielding the message
                     agent.stop()
                     agent_task.cancel()
+                    
+                    # Clean up browser resources
+                    if session_id in active_browsers:
+                        try:
+                            browser = active_browsers[session_id]
+                            await browser.close()
+                            del active_browsers[session_id]
+                            logger.info(f"🧹 Closed browser for session: {session_id}")
+                        except Exception as e:
+                            logger.error(f"❌ Error closing browser: {str(e)}")
+                    
+                    if session_id in active_browser_contexts:
+                        del active_browser_contexts[session_id]
+                    
+                    # Mark session as completed
+                    controller.finished = True
+                    logger.info(f"✅ Session {session_id} marked as completed")
+                    
                     break
                 except Exception as e:
                     logger.error(f"❌ Error stopping agent task: {str(e)}")
@@ -1580,24 +1598,41 @@ async def browser_use_agent(
         pass
 
 async def setup_browser_monitoring_hooks(browser_context: BrowserContext):
-    """Setup event listeners for monitoring page navigation and network activity."""
+    """Setup event listeners for monitoring page navigation and network activity.
+
+    We need to attach events **on the underlying Playwright BrowserContext**, not on the
+    higher-level `BrowserContext` wrapper itself. The wrapper exposes a `get_session()`
+    method that returns a `BrowserSession` object containing the `context` (a
+    Playwright `BrowserContext`) and the `current_page`.
+    """
+
     try:
-        # Monitor for new pages and navigation events
-        async def on_page_created(page):
-            logger.info(f"📄 New page created: {page.url}")
-            await inject_monitoring_scripts(page)
-            
-            # Set up page event listeners
-            await page.add_event_listener("load", lambda: asyncio.create_task(on_page_load(page)))
-            
-        # Handle page load events
-        async def on_page_load(page):
-            logger.info(f"📄 Page loaded: {page.url}")
-            await inject_monitoring_scripts(page)
-        
-        # Attach the event listeners to browser context
-        browser_context.on_page_created(on_page_created)
-        
+        # First make sure the session (and therefore the Playwright context) is created
+        session = await browser_context.get_session()
+        playwright_context = session.context  # Playwright BrowserContext
+
+        # Helper that (re)injects our monitoring JS into the given page
+        async def _inject_for_page(page):
+            try:
+                logger.info(f"📄 Injecting monitoring scripts into page: {page.url}")
+                await inject_monitoring_scripts(page)
+            except Exception as e:
+                logger.error(f"❌ Failed to inject monitoring scripts: {e}")
+
+        # Called when a new page is opened within the same Playwright context
+        async def _on_new_page(page):
+            await _inject_for_page(page)
+
+            # Re-attach load listener for that page so we reinject after navigations
+            page.on("load", lambda _: asyncio.create_task(_inject_for_page(page)))
+
+        # Attach listener for **future** pages
+        playwright_context.on("page", lambda page: asyncio.create_task(_on_new_page(page)))
+
+        # Finally, handle the *current* page that already exists
+        if session.current_page:
+            await _inject_for_page(session.current_page)
+
         logger.info("✅ Successfully set up browser monitoring hooks")
     except Exception as e:
         logger.error(f"❌ Error setting up browser monitoring hooks: {str(e)}")

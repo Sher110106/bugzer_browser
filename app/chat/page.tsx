@@ -766,7 +766,7 @@ TimerDisplay.displayName = "TimerDisplay";
 export default function ChatPage() {
   console.log("[RENDER] ChatPage is rendering");
   const { currentSettings, updateSettings } = useSettings();
-  const { currentSession, createSession, isCreatingSession, isExpired } = useSteelContext();
+  const { currentSession, createSession, isCreatingSession, isExpired, releaseSession } = useSteelContext();
   console.log("[DEBUG] ChatPage rendering");
   const { initialMessage, setInitialMessage } = useChatContext();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1894,13 +1894,8 @@ export default function ChatPage() {
     try {
       console.info("📊 Attempting to submit report for test:", testId);
       
-      // First, ensure we have the latest messages from the chat
-      console.log("Refreshing messages to ensure we have the latest data");
-      try {
-        await refreshMessages();
-      } catch (refreshError) {
-        console.warn("Failed to refresh messages, continuing with current messages:", refreshError);
-      }
+      // Use current messages - no need to refresh as this could trigger a new session
+      console.log("Using current messages for report submission");
       
       // Get current user
       const supabase = createClient();
@@ -2089,7 +2084,7 @@ export default function ChatPage() {
         className: "border border-[--red-6] bg-[--red-3] text-[--red-11]",
       });
     }
-  }, [testId, reportSubmitted, messages, toast, refreshMessages]);
+  }, [testId, reportSubmitted, messages, toast]);
 
   // Effect to save report when chat is considered complete
   useEffect(() => {
@@ -2127,6 +2122,49 @@ export default function ChatPage() {
       }
     }
   }, [testId, reportSubmitted, isLoading, messages, isPaused, submitReport]);
+
+  // Effect to handle automatic redirection after session completion
+  useEffect(() => {
+    // Check if the session is complete and we should redirect
+    if (
+      !isLoading && 
+      messages.length > 1 && 
+      !isPaused &&
+      reportSubmitted // Only redirect after report is submitted
+    ) {
+      // Check if the last message indicates completion
+      const lastMessage = messages[messages.length - 1];
+      const isComplete = lastMessage?.role === 'assistant' &&
+                        (lastMessage.content?.includes('PERFORMANCE REPORT') || 
+                         lastMessage.content?.includes('📊') ||
+                         lastMessage.content?.includes('✅'));
+
+      if (isComplete) {
+        console.log("✅ Session complete, scheduling redirect to home page...");
+        
+        // Show a toast notification
+        toast({
+          title: "Test Complete",
+          description: "Redirecting to home page in 3 seconds...",
+          className: "border border-[--green-6] bg-[--green-3] text-[--green-11]",
+        });
+
+        // Release the session first
+        if (currentSession?.id) {
+          console.log("🔄 Releasing session before redirect:", currentSession.id);
+          releaseSession(currentSession.id);
+        }
+
+        // Redirect after a delay
+        const timer = setTimeout(() => {
+          console.log("🔄 Redirecting to home page");
+          window.location.href = "/";
+        }, 3000); // 3 second delay
+
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [isLoading, messages, isPaused, reportSubmitted, toast]);
 
   // Before returning ChatPageContent, add a button to manually submit report if needed
   const chatPageContentProps = {
@@ -2169,6 +2207,23 @@ export default function ChatPage() {
             title="Manually save the test results including the performance report"
           >
             Save Test Results
+          </Button>
+        </div>
+      )}
+      {reportSubmitted && (
+        <div className="fixed bottom-4 right-4 z-50 flex gap-2">
+          <Button 
+            onClick={() => {
+              if (currentSession?.id) {
+                console.log("🔄 Releasing session before manual redirect:", currentSession.id);
+                releaseSession(currentSession.id);
+              }
+              window.location.href = "/";
+            }}
+            className="bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700 text-white shadow-lg"
+            title="Go back to home page"
+          >
+            Back to Home
           </Button>
         </div>
       )}
