@@ -2,20 +2,23 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from .schemas import ChatRequest, SessionRequest
+from .schemas import ChatRequest, SessionRequest, TestFlowRequest, TestFlowResponse
 from .utils.prompt import convert_to_chat_messages
 from .models import ModelConfig
 from .plugins import WebAgentType, get_web_agent, AGENT_CONFIGS
 from .streamer import stream_vercel_format, empty_stream
 from api.middleware.profiling_middleware import ProfilingMiddleware
+from .utils.test_flow_manager import test_flow_manager
 from pydantic import BaseModel
-from typing import List, Dict
+from typing import List, Dict, Any, Optional
 import os
 import asyncio
 import subprocess
 import re
 import time
 import logging
+from datetime import datetime
+from .schemas import TestFlowStatus
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -355,3 +358,425 @@ async def healthcheck():
     Simple health check endpoint to verify the API is running.
     """
     return {"status": "ok"}
+
+
+# Test Flow Management Endpoints
+@app.post("/api/test-flows/start", tags=["Test Flows"])
+async def start_test_flow(request: TestFlowRequest):
+    """
+    Start a new test flow for a session.
+    """
+    try:
+        result = await test_flow_manager.start_test_flow(request)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/test-flows/{session_id}/pause", tags=["Test Flows"])
+async def pause_test_flow(session_id: str):
+    """
+    Pause an active test flow.
+    """
+    try:
+        result = await test_flow_manager.pause_test_flow(session_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/test-flows/{session_id}/resume", tags=["Test Flows"])
+async def resume_test_flow(session_id: str):
+    """
+    Resume a paused test flow.
+    """
+    try:
+        result = await test_flow_manager.resume_test_flow(session_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/test-flows/{session_id}/complete", tags=["Test Flows"])
+async def complete_test_flow(session_id: str, success: bool = True, summary: str = None):
+    """
+    Complete a test flow.
+    """
+    try:
+        result = await test_flow_manager.complete_test_flow(session_id, success, summary)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/test-flows/{session_id}/summary", tags=["Test Flows"])
+async def get_test_flow_summary(session_id: str):
+    """
+    Get the current test flow summary for a session.
+    """
+    try:
+        flow = await test_flow_manager.get_test_flow_summary(session_id)
+        if not flow:
+            return {"status": "not_found", "message": f"No test flow found for session {session_id}"}
+        return flow
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/test-flows/{session_id}/export", tags=["Test Flows"])
+async def export_test_report(session_id: str, format: str = "json"):
+    """
+    Export a test flow report in the specified format.
+    """
+    try:
+        if format not in ["json", "html", "markdown"]:
+            raise HTTPException(status_code=400, detail="Unsupported format. Use: json, html, markdown")
+        
+        report = await test_flow_manager.export_test_report(session_id, format)
+        return {"format": format, "content": report}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/test-flows/status", tags=["Test Flows"])
+async def get_test_flows_status():
+    """
+    Get overall status of test flows.
+    """
+    try:
+        return {
+            "active_flows": test_flow_manager.get_active_flows_count(),
+            "completed_flows": test_flow_manager.get_completed_flows_count(),
+            "status": "healthy"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/test-flows/cleanup", tags=["Test Flows"])
+async def cleanup_old_test_flows(max_age_hours: int = 24):
+    """
+    Clean up old completed test flows.
+    """
+    try:
+        cleaned_count = await test_flow_manager.cleanup_old_flows(max_age_hours)
+        return {
+            "status": "success",
+            "message": f"Cleaned up {cleaned_count} old test flows",
+            "cleaned_count": cleaned_count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Enhanced Test Flow Endpoints
+@app.post("/api/test-flows/bulk", tags=["Test Flows"])
+async def bulk_test_flow_operations(operations: List[Dict[str, Any]]):
+    """
+    Perform multiple test flow operations in batch.
+    """
+    try:
+        from .utils.test_flow_actions import test_flow_actions
+        
+        results = await test_flow_actions.bulk_operations(operations)
+        return {
+            "status": "success",
+            "message": f"Processed {len(operations)} operations",
+            "results": results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/test-flows/{session_id}/state", tags=["Test Flows"])
+async def get_test_flow_state(session_id: str):
+    """
+    Get detailed state information for a test flow.
+    """
+    try:
+        from .utils.flow_state_manager import flow_state_manager
+        
+        state = await flow_state_manager.get_flow_state(session_id)
+        if not state:
+            return {"status": "not_found", "message": f"No flow state found for session {session_id}"}
+        
+        return {
+            "status": "success",
+            "data": state
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/test-flows/{session_id}/validate", tags=["Test Flows"])
+async def validate_test_flow_state(session_id: str, level: str = "standard"):
+    """
+    Validate the state of a test flow.
+    """
+    try:
+        from .utils.flow_state_manager import flow_state_manager, FlowValidationLevel
+        
+        # Parse validation level
+        try:
+            validation_level = FlowValidationLevel(level)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid validation level: {level}. Use: basic, standard, strict")
+        
+        validation_result = await flow_state_manager.validate_flow_state(session_id, validation_level)
+        
+        return {
+            "status": "success",
+            "data": validation_result
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/test-flows/{session_id}/retry", tags=["Test Flows"])
+async def retry_test_flow(session_id: str):
+    """
+    Manually retry a failed test flow.
+    """
+    try:
+        from .utils.flow_state_manager import flow_state_manager
+        
+        # Get current flow
+        flow = await test_flow_manager.get_test_flow_summary(session_id)
+        if not flow:
+            raise HTTPException(status_code=404, detail=f"No test flow found for session {session_id}")
+        
+        if flow.metadata.status not in [TestFlowStatus.FAILED, TestFlowStatus.TIMEOUT]:
+            raise HTTPException(status_code=400, detail=f"Cannot retry flow with status: {flow.metadata.status.value}")
+        
+        # Reset flow status and trigger retry
+        flow.metadata.status = TestFlowStatus.RUNNING
+        flow.metadata.summary = f"Manually retried at {datetime.utcnow().isoformat()}"
+        
+        # Update state manager
+        await flow_state_manager.update_flow_state(session_id, {
+            "status": TestFlowStatus.RUNNING,
+            "last_activity": datetime.utcnow()
+        })
+        
+        return {
+            "status": "success",
+            "message": f"Test flow retry initiated for session {session_id}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/test-flows/health", tags=["Test Flows"])
+async def get_test_flows_health():
+    """
+    Get comprehensive health status of the test flow system.
+    """
+    try:
+        from .utils.flow_state_manager import flow_state_manager
+        from .utils.test_flow_actions import test_flow_actions
+        
+        # Get system health from state manager
+        state_health = await flow_state_manager.get_system_health()
+        
+        # Get system status from actions
+        actions_status = await test_flow_actions.get_system_status()
+        
+        # Combine health information
+        health_data = {
+            "overall_status": "healthy",
+            "timestamp": datetime.utcnow().isoformat(),
+            "state_manager": state_health,
+            "actions_system": actions_status,
+            "test_flow_manager": {
+                "active_flows": test_flow_manager.get_active_flows_count(),
+                "completed_flows": test_flow_manager.get_completed_flows_count()
+            }
+        }
+        
+        # Determine overall status
+        if (state_health.get("status") == "error" or 
+            actions_status.get("status") == "error"):
+            health_data["overall_status"] = "error"
+        elif (state_health.get("status") == "warning" or 
+              actions_status.get("status") == "warning"):
+            health_data["overall_status"] = "warning"
+        
+        return health_data
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/test-flows/{session_id}/timeout", tags=["Test Flows"])
+async def set_test_flow_timeout(session_id: str, timeout_seconds: int):
+    """
+    Set custom timeout for a test flow.
+    """
+    try:
+        from .utils.flow_state_manager import flow_state_manager
+        
+        if timeout_seconds < 60 or timeout_seconds > 3600:
+            raise HTTPException(status_code=400, detail="Timeout must be between 60 and 3600 seconds")
+        
+        # Update timeout in state manager
+        success = await flow_state_manager.update_flow_state(session_id, {
+            "timeout_seconds": timeout_seconds
+        })
+        
+        if not success:
+            raise HTTPException(status_code=404, detail=f"No flow state found for session {session_id}")
+        
+        return {
+            "status": "success",
+            "message": f"Timeout set to {timeout_seconds} seconds for session {session_id}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/test-flows/{session_id}/capture", tags=["Test Flows"])
+async def capture_test_step_data(
+    session_id: str,
+    url: str,
+    action: str = None,
+    capture_options: Dict[str, bool] = None
+):
+    """
+    Capture comprehensive data for a test step.
+    """
+    try:
+        from .utils.test_flow_actions import test_flow_actions
+        
+        result = await test_flow_actions.record_test_step(
+            session_id=session_id,
+            url=url,
+            action=action,
+            capture_options=capture_options
+        )
+        
+        if result.status == "success":
+            return result
+        else:
+            raise HTTPException(status_code=400, detail=result.message)
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/test-flows/analytics", tags=["Test Flows"])
+async def get_test_flows_analytics(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    tags: Optional[List[str]] = None
+):
+    """
+    Get analytics and insights about test flows.
+    """
+    try:
+        from .utils.test_flow_actions import test_flow_actions
+        
+        # Get all flows for analysis
+        all_flows = []
+        
+        # Combine active and completed flows
+        for session_id in test_flow_manager.active_flows:
+            flow = await test_flow_manager.get_test_flow_summary(session_id)
+            if flow:
+                all_flows.append(flow)
+        
+        for session_id in test_flow_manager.completed_flows:
+            flow = await test_flow_manager.get_test_flow_summary(session_id)
+            if flow:
+                all_flows.append(flow)
+        
+        # Filter by date range if provided
+        if start_date or end_date:
+            filtered_flows = []
+            for flow in all_flows:
+                flow_start = flow.metadata.start_time
+                
+                if start_date:
+                    start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                    if flow_start < start_dt:
+                        continue
+                
+                if end_date:
+                    end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                    if flow_start > end_dt:
+                        continue
+                
+                filtered_flows.append(flow)
+            
+            all_flows = filtered_flows
+        
+        # Filter by tags if provided
+        if tags:
+            filtered_flows = []
+            for flow in all_flows:
+                if any(tag in (flow.metadata.tags or []) for tag in tags):
+                    filtered_flows.append(flow)
+            
+            all_flows = filtered_flows
+        
+        # Calculate analytics
+        total_flows = len(all_flows)
+        if total_flows == 0:
+            return {
+                "status": "success",
+                "message": "No flows found for the specified criteria",
+                "data": {
+                    "total_flows": 0,
+                    "analytics": {}
+                }
+            }
+        
+        # Status distribution
+        status_counts = {}
+        for flow in all_flows:
+            status = flow.metadata.status.value
+            status_counts[status] = status_counts.get(status, 0) + 1
+        
+        # Performance metrics
+        total_steps = sum(flow.metadata.total_steps for flow in all_flows)
+        avg_steps_per_flow = total_steps / total_flows if total_flows > 0 else 0
+        
+        # Success rate
+        successful_flows = sum(1 for flow in all_flows if flow.metadata.status == TestFlowStatus.COMPLETED)
+        success_rate = (successful_flows / total_flows) * 100 if total_flows > 0 else 0
+        
+        # Duration analysis
+        durations = []
+        for flow in all_flows:
+            if flow.metadata.end_time and flow.metadata.start_time:
+                duration = (flow.metadata.end_time - flow.metadata.start_time).total_seconds()
+                durations.append(duration)
+        
+        avg_duration = sum(durations) / len(durations) if durations else 0
+        
+        analytics = {
+            "total_flows": total_flows,
+            "status_distribution": status_counts,
+            "performance_metrics": {
+                "total_steps": total_steps,
+                "average_steps_per_flow": round(avg_steps_per_flow, 2),
+                "success_rate": round(success_rate, 2)
+            },
+            "duration_analysis": {
+                "average_duration_seconds": round(avg_duration, 2),
+                "flows_with_duration": len(durations)
+            },
+            "date_range": {
+                "start_date": start_date,
+                "end_date": end_date
+            },
+            "tags_filter": tags
+        }
+        
+        return {
+            "status": "success",
+            "message": f"Analytics generated for {total_flows} flows",
+            "data": analytics
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

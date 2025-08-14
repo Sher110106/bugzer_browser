@@ -1,5 +1,5 @@
 import logging
-from browser_use import Agent, Browser, BrowserConfig, Controller
+from browser_use import Agent, Controller
 from typing import Any, List, Mapping, AsyncIterator, Optional, Dict
 from ...providers import create_llm
 from ...models import ModelConfig
@@ -8,17 +8,12 @@ from langchain_core.messages import ToolMessage
 import os
 from dotenv import load_dotenv
 from ...utils.types import AgentSettings
-from browser_use.browser.views import BrowserState
-from browser_use.browser.context import BrowserContext
-from browser_use.agent.views import (
-    AgentHistoryList,
-    AgentOutput,
-)
 import asyncio
 from pydantic import BaseModel
 import uuid
 from .system_prompt import ExtendedSystemPrompt
 from collections import defaultdict
+# Import lifecycle hooks only when needed to avoid circular imports
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -30,9 +25,8 @@ os.environ["ANONYMIZED_TELEMETRY"] = "false"
 STEEL_API_KEY = os.getenv("STEEL_API_KEY")
 STEEL_CONNECT_URL = os.getenv("STEEL_CONNECT_URL")
 
-# Dictionary to store active browser instances by session_id
-active_browsers: Dict[str, Browser] = {}
-active_browser_contexts: Dict[str, BrowserContext] = {}
+# Dictionary to store active browser sessions by session_id
+active_browser_sessions: Dict[str, Any] = {}
 
 # Global variable to track resume state
 _agent_resumed = False
@@ -96,13 +90,13 @@ def print_call(message: str) -> str:
 @controller.action('Capture page performance metrics')
 async def capture_performance_metrics() -> str:
     """Captures page performance metrics including latency, load time, and other timing information. Stores data for session summary."""
-    if not controller.agent or not controller.agent.browser_context:
-        return "No active browser context found"
+    if not controller.agent or not controller.agent.browser_session:
+        return "No active browser session found"
     
     page = None # Initialize page to None
     try:
-        # Get the current page
-        page = await controller.agent.browser_context.get_current_page()
+        # Get the current page using the new browser_use v0.5.10 API
+        page = await controller.agent.browser_session.get_current_page()
         page_url = page.url # Capture URL early
         
         # Use JavaScript to get detailed performance metrics
@@ -197,13 +191,13 @@ async def capture_performance_metrics() -> str:
 @controller.action('Capture network requests')
 async def capture_network_requests() -> str:
     """Captures all network requests made by the page using performance API and summarizes them. Stores data for session summary."""
-    if not controller.agent or not controller.agent.browser_context:
-        return "No active browser context found"
+    if not controller.agent or not controller.agent.browser_session:
+        return "No active browser session found"
     
     page = None
     try:
-        # Get the current page
-        page = await controller.agent.browser_context.get_current_page()
+        # Get the current page using the new browser_use v0.5.10 API
+        page = await controller.agent.browser_session.get_current_page()
         page_url = page.url
 
         # Use JavaScript to get detailed network requests
@@ -283,13 +277,13 @@ async def capture_network_requests() -> str:
 @controller.action('Detect page anomalies')
 async def detect_page_anomalies() -> str:
     """Detects potential anomalies on the page including layout issues, console errors, and network problems. Stores data for session summary."""
-    if not controller.agent or not controller.agent.browser_context:
-        return "No active browser context found"
+    if not controller.agent or not controller.agent.browser_session:
+        return "No active browser session found"
     
     page = None
     try:
-        # Get the current page
-        page = await controller.agent.browser_context.get_current_page()
+        # Get the current page using the new browser_use v0.5.10 API
+        page = await controller.agent.browser_session.get_current_page()
         page_url = page.url
 
         # Try to take a full-page screenshot with scrolling and timeout
@@ -340,8 +334,8 @@ async def detect_page_anomalies() -> str:
                 return await scrollPageAndCapture();
             }""")
             
-            # Now capture the screenshot after scrolling
-            screenshot_task = asyncio.create_task(controller.agent.browser_context.take_screenshot())
+            # Now capture the screenshot after scrolling using the new browser_use v0.5.10 API
+            screenshot_task = asyncio.create_task(controller.agent.browser_session.take_screenshot())
             screenshot_b64 = await asyncio.wait_for(screenshot_task, timeout=15.0)  # 15 second timeout
             logger.info(f"📸 Full-page screenshot captured successfully for {page_url}")
         except asyncio.TimeoutError:
@@ -518,15 +512,12 @@ async def pause_execution(reason: str) -> str:
     logger.info(f"⏸️ Pausing execution: {reason}")
     
     # Store current browser state before pausing (to prevent about:blank issue)
-    browser_context = None
-    browser = None
-    if controller.session_id in active_browser_contexts:
-        browser_context = active_browser_contexts[controller.session_id]
-    if controller.session_id in active_browsers:
-        browser = active_browsers[controller.session_id]
+    browser_session = None
+    if controller.session_id in active_browser_sessions:
+        browser_session = active_browser_sessions[controller.session_id]
     
     # Log the current state for debugging
-    if browser:
+    if browser_session:
         logger.info(f"📊 Current browser state before pause - session_id: {controller.session_id}")
     
     # Set _agent_resumed to False to indicate we're paused
@@ -543,10 +534,9 @@ async def pause_execution(reason: str) -> str:
     controller.agent.pause()
     logger.info(f"⏸️ Agent paused for session: {controller.session_id}")
     
-    # Make sure browser and context remain active and are not reset
-    if controller.session_id:
-        active_browser_contexts[controller.session_id] = browser_context
-        active_browsers[controller.session_id] = browser
+    # Make sure browser session remains active and is not reset
+    if controller.session_id and browser_session:
+        active_browser_sessions[controller.session_id] = browser_session
     
     # Return a clean message for the frontend
     return formatted_reason
@@ -562,19 +552,14 @@ async def resume_execution(request: ResumeRequest) -> dict:
     
     # Ensure browser state is preserved
     session_id = request.session_id
-    if session_id in active_browsers and session_id in active_browser_contexts:
+    if session_id in active_browser_sessions:
         logger.info(f"📊 Preserving browser state for session on resume: {session_id}")
-        browser = active_browsers[session_id]
-        browser_context = active_browser_contexts[session_id]
+        browser_session = active_browser_sessions[session_id]
         
-        # Make sure we're still using the same browser instances
-        if controller.agent.browser != browser:
-            logger.info(f"🔄 Restoring browser instance for session: {session_id}")
-            controller.agent.browser = browser
-            
-        if controller.agent.browser_context != browser_context:
-            logger.info(f"🔄 Restoring browser context for session: {session_id}")
-            controller.agent.browser_context = browser_context
+        # Make sure we're still using the same browser session
+        if controller.agent.browser_session != browser_session:
+            logger.info(f"🔄 Restoring browser session for session: {session_id}")
+            controller.agent.browser_session = browser_session
     
     # First set the flag to true so ongoing processes know we're resumed
     _agent_resumed = True
@@ -618,15 +603,12 @@ async def pause_execution_manually(request: PauseRequest) -> dict:
         return {"status": "error", "message": "Session ID mismatch"}
     
     # Store current browser state before pausing
-    browser_context = None
-    browser = None
-    if controller.session_id in active_browser_contexts:
-        browser_context = active_browser_contexts[controller.session_id]
-    if controller.session_id in active_browsers:
-        browser = active_browsers[controller.session_id]
+    browser_session = None
+    if controller.session_id in active_browser_sessions:
+        browser_session = active_browser_sessions[controller.session_id]
     
     # Log the current state for debugging
-    if browser:
+    if browser_session:
         logger.info(f"📊 Preserving browser state on manual pause - session_id: {controller.session_id}")
     
     # Set _agent_resumed to false to indicate pause state
@@ -637,25 +619,24 @@ async def pause_execution_manually(request: PauseRequest) -> dict:
     controller.agent.pause()
     logger.info(f"⏸️ Agent manually paused for session: {controller.session_id}")
     
-    # Make sure browser and context remain active and are not reset
-    if controller.session_id:
-        active_browser_contexts[controller.session_id] = browser_context
-        active_browsers[controller.session_id] = browser
+    # Make sure browser session remains active and is not reset
+    if controller.session_id and browser_session:
+        active_browser_sessions[controller.session_id] = browser_session
     
     return {"status": "success", "message": "Agent manually paused for user control"}
 
 @controller.action('Get session exploration summary')
 async def get_session_summary() -> str:
     """Retrieves all collected metrics for the current page and session by automatically calling all monitoring tools first."""
-    if not controller.agent or not controller.agent.browser_context:
-        return "No active browser context found"
+    if not controller.agent or not controller.agent.browser_session:
+        return "No active browser session found"
     
     if not controller.session_id:
         return "No active session ID found."
 
     try:
-        # Get the current page
-        page = await controller.agent.browser_context.get_current_page()
+        # Get the current page using the new browser_use v0.5.10 API
+        page = await controller.agent.browser_session.get_current_page()
         current_url = page.url
 
         # First call all the monitoring tools to collect fresh data
@@ -691,6 +672,23 @@ async def get_session_summary() -> str:
         # Get the session data
         session_data = controller._get_current_session_metrics()
         pages_visited = session_data.get("pages", {})
+        
+        # Check if we have an active test flow and integrate with it
+        test_flow_summary = ""
+        try:
+            from ...utils.test_flow_manager import test_flow_manager
+            flow = await test_flow_manager.get_test_flow_summary(controller.session_id)
+            if flow:
+                test_flow_summary = f"""
+                
+🧪 Test Flow Integration:
+   - Flow Name: {flow.metadata.name}
+   - Status: {flow.metadata.status.value}
+   - Total Steps: {flow.metadata.total_steps}
+   - Success Rate: {flow.metadata.successful_steps}/{flow.metadata.total_steps}
+"""
+        except Exception as e:
+            logger.debug(f"Test flow integration not available: {str(e)}")
 
         # Initialize a default structure to ensure we always follow the exact format
         perf_data = {
@@ -883,7 +881,7 @@ async def get_session_summary() -> str:
         formatted_summary = f"""
 ============ PERFORMANCE METRICS REPORT ============
 
-{summary}
+{summary}{test_flow_summary}
 
 =================================================="""
         
@@ -1065,7 +1063,7 @@ To collect detailed metrics, please try again with:
 "Generate performance report" """
 
 def yield_data(
-    browser_state: "BrowserState", agent_output: "AgentOutput", step_number: int
+    browser_state: Any, agent_output: Any, step_number: int
 ):
     """Callback function for each step - modified to ensure action memory appears"""
     try:
@@ -1076,23 +1074,30 @@ def yield_data(
         if not hasattr(yield_data, "_done_processed"):
             yield_data._done_processed = False
         
+        # Handle both old and new API structures
+        current_state = None
+        if hasattr(agent_output, 'current_state'):
+            current_state = agent_output.current_state
+        elif hasattr(agent_output, 'state'):
+            current_state = agent_output.state
+        
         # Format Previous Goal (only for steps after the first few)
-        if step_number > 2 and agent_output.current_state.evaluation_previous_goal:
-            message = AIMessage(content=f"*Previous Goal*:\n{agent_output.current_state.evaluation_previous_goal}")
+        if step_number > 2 and current_state and hasattr(current_state, 'evaluation_previous_goal') and current_state.evaluation_previous_goal:
+            message = AIMessage(content=f"*Previous Goal*:\n{current_state.evaluation_previous_goal}")
             asyncio.get_event_loop().call_soon_threadsafe(queue.put_nowait, message)
             asyncio.get_event_loop().call_soon_threadsafe(queue.put_nowait, {"stop": True})
             logger.info("✅ Sent Previous Goal")
         
         # Format Memory - Always show this
-        if agent_output.current_state.memory:
-            message = AIMessage(content=f"*Memory*:\n{agent_output.current_state.memory}")
+        if current_state and hasattr(current_state, 'memory') and current_state.memory:
+            message = AIMessage(content=f"*Memory*:\n{current_state.memory}")
             asyncio.get_event_loop().call_soon_threadsafe(queue.put_nowait, message)
             asyncio.get_event_loop().call_soon_threadsafe(queue.put_nowait, {"stop": True})
             logger.info("✅ Sent Memory")
         
         # Format Next Goal - Always show this
-        if agent_output.current_state.next_goal:
-            message = AIMessage(content=f"*Next Goal*:\n{agent_output.current_state.next_goal}")
+        if current_state and hasattr(current_state, 'next_goal') and current_state.next_goal:
+            message = AIMessage(content=f"*Next Goal*:\n{current_state.next_goal}")
             asyncio.get_event_loop().call_soon_threadsafe(queue.put_nowait, message)
             asyncio.get_event_loop().call_soon_threadsafe(queue.put_nowait, {"stop": True})
             logger.info("✅ Sent Next Goal")
@@ -1103,13 +1108,39 @@ def yield_data(
         
         # First check if any 'done' action is in the current step
         has_done_action = False
-        for action_model in agent_output.action:
-            for key, value in action_model.model_dump().items():
-                if key == "done" and value:
-                    has_done_action = True
-                    break
-            if has_done_action:
-                break
+        actions = []
+        
+        # Handle different ways actions might be stored in the new API
+        if hasattr(agent_output, 'action'):
+            actions = agent_output.action
+        elif current_state and hasattr(current_state, 'action'):
+            actions = current_state.action
+        elif hasattr(agent_output, 'history') and agent_output.history:
+            # Try to get the latest actions from history
+            try:
+                latest_actions = agent_output.history.model_actions()
+                if latest_actions:
+                    actions = latest_actions[-1] if isinstance(latest_actions[-1], list) else [latest_actions[-1]]
+            except:
+                actions = []
+        
+        # Check for done action
+        if actions:
+            try:
+                for action_model in actions:
+                    if hasattr(action_model, 'model_dump'):
+                        for key, value in action_model.model_dump().items():
+                            if key == "done" and value:
+                                has_done_action = True
+                                break
+                    elif isinstance(action_model, dict):
+                        if "done" in action_model and action_model["done"]:
+                            has_done_action = True
+                            break
+                    if has_done_action:
+                        break
+            except Exception as e:
+                logger.warning(f"Error checking for done action: {e}")
                 
         # If we have a done action and already processed one before, skip processing this entire step
         if has_done_action and (yield_data._done_processed or controller.finished):
@@ -1117,9 +1148,20 @@ def yield_data(
             return
             
         # Process each action model
-        for action_model in agent_output.action:
+        for action_model in actions:
             logger.info(f"🔧 Processing action: {action_model}")
-            for key, value in action_model.model_dump().items():
+            
+            # Handle different action model formats
+            action_dict = {}
+            if hasattr(action_model, 'model_dump'):
+                action_dict = action_model.model_dump()
+            elif isinstance(action_model, dict):
+                action_dict = action_model
+            else:
+                logger.warning(f"Unknown action model format: {type(action_model)}")
+                continue
+                
+            for key, value in action_dict.items():
                 if value:
                     if key == "done":
                         # When the agent is done, show the completion message
@@ -1137,6 +1179,7 @@ def yield_data(
                             asyncio.get_event_loop().call_soon_threadsafe(
                                 queue.put_nowait, {"stop": True}
                             )
+                            # Let the natural completion flow handle termination
                             continue
                             
                         # Set controller as finished before generating report
@@ -1164,6 +1207,7 @@ def yield_data(
                                 asyncio.get_event_loop().call_soon_threadsafe(
                                     queue.put_nowait, {"stop": True}
                                 )
+                                # Let the natural completion flow handle termination
                                 return
                         except Exception as e:
                             logger.error(f"❌ Error generating report in done action: {str(e)}")
@@ -1175,6 +1219,8 @@ def yield_data(
                         asyncio.get_event_loop().call_soon_threadsafe(
                             queue.put_nowait, {"stop": True}
                         )
+                        
+                        # Let the natural completion flow handle termination
                             
                     else:
                         # For other actions, create a tool call
@@ -1207,7 +1253,7 @@ def yield_data(
         except:
             pass
 
-def yield_done(history: "AgentHistoryList"):
+def yield_done(history: Any):
     """Callback when the agent completes its task."""
     try:
         # Always log for debugging
@@ -1343,44 +1389,49 @@ async def browser_use_agent(
     # Reset the resumed flag at the start of a new session
     _agent_resumed = False
 
-    browser = None
-    browser_context = None
     queue = asyncio.Queue()  # Create a new queue for this session
 
-    # Check if we already have a browser for this session
-    if session_id in active_browsers:
-        logger.info("🔄 Reusing existing browser for session: %s", session_id)
-        browser = active_browsers[session_id]
-        browser_context = active_browser_contexts[session_id]
+    # Check if we already have a browser session for this session
+    if session_id in active_browser_sessions:
+        logger.info("🔄 Reusing existing browser session for session: %s", session_id)
+        browser_session = active_browser_sessions[session_id]
     else:
-        # Create a new browser instance
-        logger.info("🌐 Creating new browser for session: %s", session_id)
-        browser = Browser(
-            BrowserConfig(
-                cdp_url=f"{STEEL_CONNECT_URL}?apiKey={STEEL_API_KEY}&sessionId={session_id}"
-            )
+        # Create a new browser session instance using the new API
+        logger.info("🌐 Creating new browser session for session: %s", session_id)
+        from browser_use import BrowserSession
+        
+        # Create a browser session that connects to Steel via CDP URL
+        browser_session = BrowserSession(
+            cdp_url=f"{STEEL_CONNECT_URL}?apiKey={STEEL_API_KEY}&sessionId={session_id}"
         )
-        # Use our custom browser context instead of the default one.
-        browser_context = BrowserContext(browser=browser)
         
         # Store for future use
-        active_browsers[session_id] = browser
-        active_browser_contexts[session_id] = browser_context
+        active_browser_sessions[session_id] = browser_session
         
-        # Set up monitoring hooks
-        await setup_browser_monitoring_hooks(browser_context)
-
+        # Set up monitoring hooks after the session is started
+        # We'll need to modify this to work with the new API
+        # await setup_browser_monitoring_hooks(browser_session)
+    
+    # Extract the task string from the message content
+    # The content can be either a string or a list of parts like [{"type": "text", "text": "..."}]
+    task_content = history[-1]["content"]
+    if isinstance(task_content, list):
+        # Extract text from the list format
+        task_string = " ".join(
+            part["text"] for part in task_content if part.get("type") == "text"
+        )
+    else:
+        task_string = str(task_content)
+    
     agent = Agent(
+        task=task_string,
         llm=llm,
-        task=history[-1]["content"],
+        browser_session=browser_session,
         controller=controller,
-        browser=browser,
-        browser_context=browser_context,
         generate_gif=False,
         use_vision=use_vision,
-        register_new_step_callback=yield_data,
-        register_done_callback=yield_done,
-        system_prompt_class=ExtendedSystemPrompt,
+        max_failures=3,  # Default value from the new API
+        retry_delay=10,  # Default value from the new API
     )
     logger.info("🌐 Created Agent with browser instance (use_vision=%s)", use_vision)
 
@@ -1394,7 +1445,63 @@ async def browser_use_agent(
     # Add a variable to store the final report
     final_report = None
 
-    agent_task = asyncio.create_task(agent.run(steps))
+    # Define callback hooks for the new API
+    async def on_step_start_hook(agent_instance):
+        """Hook called at the start of each step - simplified for v0.5.10"""
+        try:
+            # Get the current step number from the agent history
+            step_number = len(agent_instance.history) if hasattr(agent_instance, 'history') else 1
+            logger.info(f"🔄 Step {step_number} started")
+            
+            # For now, just log - let the library handle everything naturally
+            # We can re-enable yield_data if needed, but it's causing issues with termination
+            
+        except Exception as e:
+            logger.error(f"Error in on_step_start_hook: {e}")
+    
+    async def on_step_end_hook(agent_instance):
+        """Hook called at the end of each step - simplified for v0.5.10"""
+        try:
+            # Let the browser_use library handle everything naturally
+            # Don't interfere with the completion process
+            pass
+                    
+        except Exception as e:
+            logger.error(f"Error in on_step_end_hook: {e}")
+    
+    # Run the agent and let it complete naturally
+    try:
+        logger.info("🚀 Starting agent with natural completion handling")
+        agent_history = await agent.run(
+            max_steps=steps,
+            on_step_start=on_step_start_hook,
+            on_step_end=on_step_end_hook
+        )
+        logger.info("✅ Agent completed naturally, processing final result")
+        
+        # Process the final result
+        if agent_history and hasattr(agent_history, 'final_result'):
+            final_result = agent_history.final_result()
+            if final_result:
+                logger.info(f"📊 Final result: {final_result[:200]}...")
+                # Send the final result as a completion message
+                yield AIMessage(content=final_result)
+        
+        # Generate and send the final performance report
+        try:
+            report_html = await display_performance_report()
+            if report_html:
+                yield AIMessage(content=report_html)
+        except Exception as e:
+            logger.error(f"Error generating final report: {e}")
+        
+        # All done - return from the generator
+        return
+        
+    except Exception as e:
+        logger.error(f"Error running agent: {e}")
+        yield AIMessage(content=f"❌ Agent execution failed: {str(e)}")
+        return
     logger.info("▶️ Started agent task with %d steps", steps)
 
     # Store special messages until agent is resumed
@@ -1409,8 +1516,8 @@ async def browser_use_agent(
                 agent.stop()
                 agent_task.cancel()
                 break
-            if agent._too_many_failures():
-                break
+            # Note: Failure handling is now managed internally by the Agent in v0.5.10
+            # The _too_many_failures() method no longer exists
                 
             # Wait for data from the queue
             try:
@@ -1426,7 +1533,8 @@ async def browser_use_agent(
                     has_pending_messages = False
                 continue
                 
-            if data == "END":  # You'll need to send this when done
+            if data == "END":  # Terminate execution loop
+                logger.info("🛑 Received END signal, terminating execution loop")
                 break
             
             # Check if agent was resumed - if so, release any pending special messages
@@ -1483,17 +1591,17 @@ async def browser_use_agent(
                     agent_task.cancel()
                     
                     # Clean up browser resources
-                    if session_id in active_browsers:
+                    if session_id in active_browser_sessions:
                         try:
-                            browser = active_browsers[session_id]
+                            browser = active_browser_sessions[session_id]
                             await browser.close()
-                            del active_browsers[session_id]
+                            del active_browser_sessions[session_id]
                             logger.info(f"🧹 Closed browser for session: {session_id}")
                         except Exception as e:
                             logger.error(f"❌ Error closing browser: {str(e)}")
                     
-                    if session_id in active_browser_contexts:
-                        del active_browser_contexts[session_id]
+                    if session_id in active_browser_sessions:
+                        del active_browser_sessions[session_id]
                     
                     # Mark session as completed
                     controller.finished = True
@@ -1597,7 +1705,7 @@ async def browser_use_agent(
         # The browser instances will be managed by the Steel API and cleaned up when the session expires
         pass
 
-async def setup_browser_monitoring_hooks(browser_context: BrowserContext):
+async def setup_browser_monitoring_hooks(browser_context: Any):
     """Setup event listeners for monitoring page navigation and network activity.
 
     We need to attach events **on the underlying Playwright BrowserContext**, not on the
@@ -1753,12 +1861,12 @@ async def inject_monitoring_scripts(page):
 @controller.action('Get real-time network activity')
 async def get_real_time_network_activity() -> str:
     """Gets the most recent network requests and activities that have occurred on the page."""
-    if not controller.agent or not controller.agent.browser_context:
-        return "No active browser context found"
+    if not controller.agent or not controller.agent.browser_session:
+        return "No active browser session found"
     
     try:
-        # Get the current page
-        page = await controller.agent.browser_context.get_current_page()
+        # Get the current page using the new browser_use v0.5.10 API
+        page = await controller.agent.browser_session.get_current_page()
         
         # Get the real-time network data
         network_data = await page.evaluate("""() => {
@@ -2161,3 +2269,164 @@ def force_display_report():
     except Exception as e:
         logger.error(f"❌ Error in force_display_report: {str(e)}")
         return f"Error displaying performance report: {str(e)}"
+
+@controller.action('Start test flow')
+async def start_test_flow(flow_name: str, user_request: str) -> str:
+    """Start a new test flow for the current session. This should be called at the beginning of a test sequence."""
+    if not controller.session_id:
+        return "No active session ID found. Cannot start test flow."
+    
+    try:
+        # Import lifecycle hooks locally to avoid circular imports
+        from ...utils.lifecycle_hooks import test_flow_lifecycle
+        
+        # Start the test flow using the lifecycle system
+        success = await test_flow_lifecycle.flow_start(controller.session_id, flow_name, user_request)
+        
+        if success:
+            return f"✅ Test flow '{flow_name}' started successfully for session {controller.session_id}"
+        else:
+            return f"❌ Failed to start test flow '{flow_name}' for session {controller.session_id}"
+            
+    except Exception as e:
+        logger.error(f"Error starting test flow: {str(e)}")
+        return f"❌ Error starting test flow: {str(e)}"
+
+
+@controller.action('End test flow')
+async def end_test_flow(success: bool = True, summary: str = None) -> str:
+    """End the current test flow for the session. This should be called when completing a test sequence."""
+    if not controller.session_id:
+        return "No active session ID found. Cannot end test flow."
+    
+    try:
+        # Import lifecycle hooks locally to avoid circular imports
+        from ...utils.lifecycle_hooks import test_flow_lifecycle
+        
+        # End the test flow using the lifecycle system
+        success_result = await test_flow_lifecycle.flow_end(controller.session_id, success, summary)
+        
+        if success_result:
+            status = "completed successfully" if success else "completed with failures"
+            return f"✅ Test flow {status} for session {controller.session_id}"
+        else:
+            return f"❌ Failed to end test flow for session {controller.session_id}"
+            
+    except Exception as e:
+        logger.error(f"Error ending test flow: {str(e)}")
+        return f"❌ Error ending test flow: {str(e)}"
+
+
+@controller.action('Record test step')
+async def record_test_step(url: str, action: str = None, metrics: str = None, errors: str = None) -> str:
+    """Record a test step with the current page information and any metrics or errors."""
+    if not controller.session_id:
+        return "No active session ID found. Cannot record test step."
+    
+    try:
+        from ...schemas import TestStepData
+        # Import lifecycle hooks locally to avoid circular imports
+        from ...utils.lifecycle_hooks import test_flow_lifecycle
+        
+        # Parse metrics if provided as JSON string
+        metrics_dict = None
+        if metrics:
+            try:
+                import json
+                metrics_dict = json.loads(metrics)
+            except json.JSONDecodeError:
+                logger.warning(f"Invalid JSON metrics: {metrics}")
+        
+        # Parse errors if provided
+        errors_list = None
+        if errors:
+            errors_list = [errors] if isinstance(errors, str) else errors
+        
+        # Create step data
+        step_data = TestStepData(
+            url=url,
+            action=action,
+            metrics=metrics_dict,
+            errors=errors_list
+        )
+        
+        # Record the step using the lifecycle system
+        success = await test_flow_lifecycle.step_end(controller.session_id, step_data)
+        
+        if success:
+            return f"✅ Test step recorded successfully for {url}"
+        else:
+            return f"❌ Failed to record test step for {url}"
+            
+    except Exception as e:
+        logger.error(f"Error recording test step: {str(e)}")
+        return f"❌ Error recording test step: {str(e)}"
+
+
+@controller.action('Get test flow summary')
+async def get_test_flow_summary() -> str:
+    """Get a summary of the current test flow for the session."""
+    if not controller.session_id:
+        return "No active session ID found. Cannot get test flow summary."
+    
+    try:
+        from ...utils.test_flow_manager import test_flow_manager
+        
+        flow = await test_flow_manager.get_test_flow_summary(controller.session_id)
+        
+        if not flow:
+            return f"No test flow found for session {controller.session_id}"
+        
+        # Format the summary
+        summary = f"""
+📋 Test Flow Summary: {flow.metadata.name}
+
+📝 User Request: {flow.metadata.user_request}
+🔄 Status: {flow.metadata.status.value}
+⏰ Start Time: {flow.metadata.start_time}
+📊 Total Steps: {flow.metadata.total_steps}
+✅ Successful Steps: {flow.metadata.successful_steps}
+❌ Failed Steps: {flow.metadata.failed_steps}
+"""
+        
+        if flow.metadata.summary:
+            summary += f"\n📄 Summary: {flow.metadata.summary}"
+        
+        if flow.performance_summary:
+            perf = flow.performance_summary
+            summary += f"""
+📈 Performance Summary:
+   - Average Step Duration: {perf.get('average_step_duration_ms', 0):.2f}ms
+   - Average Load Time: {perf.get('average_load_time_ms', 0):.2f}ms
+   - Success Rate: {perf.get('success_rate', 0):.1f}%
+"""
+        
+        return summary
+        
+    except Exception as e:
+        logger.error(f"Error getting test flow summary: {str(e)}")
+        return f"❌ Error getting test flow summary: {str(e)}"
+
+
+@controller.action('Export test report')
+async def export_test_report(format: str = "json") -> str:
+    """Export the current test flow report in the specified format."""
+    if not controller.session_id:
+        return "No active session ID found. Cannot export test report."
+    
+    try:
+        from ...utils.test_flow_manager import test_flow_manager
+        
+        if format not in ["json", "html", "markdown"]:
+            return "❌ Unsupported format. Use: json, html, markdown"
+        
+        report = await test_flow_manager.export_test_report(controller.session_id, format)
+        
+        if format == "json":
+            return f"✅ Test report exported in JSON format. Length: {len(report)} characters"
+        else:
+            return f"✅ Test report exported in {format.upper()} format. Length: {len(report)} characters"
+            
+    except Exception as e:
+        logger.error(f"Error exporting test report: {str(e)}")
+        return f"❌ Error exporting test report: {str(e)}"

@@ -3,6 +3,14 @@ from anthropic import Client
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI, AzureChatOpenAI
 from langchain_core.language_models.chat_models import BaseChatModel
+
+# Browser-use LLM imports
+from browser_use.llm import ChatOpenAI as BrowserUseOpenAI
+from browser_use.llm import ChatAnthropic as BrowserUseAnthropic
+from browser_use.llm import ChatGoogle as BrowserUseGoogle
+from browser_use.llm import ChatAzureOpenAI as BrowserUseAzureOpenAI
+
+# Pydantic model issue resolved with langchain-openai 0.3.29+ and langchain-core 0.3.74+
 from .models import ModelConfig, ModelProvider
 from typing import Sequence, Union, Dict, Type, Callable, Any
 from langchain_core.tools import BaseTool
@@ -50,64 +58,43 @@ class BetaChatAnthropic(ChatAnthropic):
         return super().bind(tools=anthropic_tools, **kwargs)
 
 
-def create_llm(config: ModelConfig) -> tuple[BaseChatModel | Client, bool]:
+def create_llm(config: ModelConfig) -> tuple[Any, bool]:
     """
     Returns a tuple containing:
-    1. The appropriate LangChain LLM object based on the ModelConfig provider
+    1. The appropriate browser_use LLM object based on the ModelConfig provider
     2. A boolean indicating whether vision should be used (False for DeepSeek, True for others)
     """
     if config.provider == ModelProvider.AZURE_OPENAI:
-        return AzureChatOpenAI(
-            azure_deployment=config.model_name or "gpt-4o-mini",
+        return BrowserUseAzureOpenAI(
+            model=config.model_name or "gpt-4o-mini",
             temperature=config.temperature,
-            max_tokens=config.max_tokens,
-            openai_api_key=(
-                os.getenv("AZURE_OPENAI_API_KEY") if not config.api_key else config.api_key
-            ),
-            openai_api_version=os.getenv("OPENAI_API_VERSION", "2025-01-01-preview"),
-            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT", ""),
             **config.extra_params,
         ), True
     elif config.provider == ModelProvider.OPENAI:
-        return ChatOpenAI(
-            model_name=config.model_name or "gpt-4o-mini",
+        return BrowserUseOpenAI(
+            model=config.model_name or "gpt-4o-mini",
             temperature=config.temperature,
-            max_tokens=config.max_tokens,
-            api_key=(
-                os.getenv("OPENAI_API_KEY") if not config.api_key else config.api_key
-            ),
             **config.extra_params,
         ), True
     
     elif config.provider == ModelProvider.ANTHROPIC:
-        return ChatAnthropic(
-            model=config.model_name or "claude-3-7-sonnet-latest",
-            max_tokens_to_sample=config.max_tokens,
+        return BrowserUseAnthropic(
+            model=config.model_name or "claude-3-5-sonnet-20241022",
             temperature=config.temperature,
-            api_key=(
-                os.getenv("ANTHROPIC_API_KEY") if not config.api_key else config.api_key
-            ),
             **config.extra_params,
         ), True
     elif config.provider == ModelProvider.GEMINI:
-        return ChatGoogleGenerativeAI(
-            model=config.model_name or "gemini-2.0-flash",
+        return BrowserUseGoogle(
+            model=config.model_name or "gemini-2.0-flash-exp",
             temperature=config.temperature,
-            max_output_tokens=config.max_tokens,
-            google_api_key=(
-                os.getenv("GOOGLE_API_KEY") if not config.api_key else config.api_key
-            ),
             **config.extra_params,
         ), True
     elif config.provider == ModelProvider.DEEPSEEK:
-        api_key = config.api_key or os.getenv("DEEPSEEK_API_KEY", "")
-        
-        return ChatOpenAI(
-            base_url="https://api.deepseek.com/v1",
-            model_name=config.model_name or "deepseek-chat",
+        # For DeepSeek, use OpenAI-compatible endpoint with browser_use
+        return BrowserUseOpenAI(
+            model=config.model_name or "deepseek-chat",
             temperature=config.temperature,
-            max_tokens=config.max_tokens,
-            api_key=SecretStr(api_key),
+            base_url="https://api.deepseek.com/v1",
             **config.extra_params,
         ), False
     else:
